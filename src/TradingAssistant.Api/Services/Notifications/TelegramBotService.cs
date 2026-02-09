@@ -38,7 +38,7 @@ public class TelegramBotService : BackgroundService
         _authorizedChatId = _config.GetValue<long>("Telegram:ChatId");
         _botClient = new TelegramBotClient(token);
 
-        var me = await _botClient.GetMeAsync(stoppingToken);
+        var me = await _botClient.GetMe(stoppingToken);
         _logger.LogInformation("Telegram bot started: @{Username}", me.Username);
 
         var receiverOptions = new ReceiverOptions
@@ -103,7 +103,7 @@ public class TelegramBotService : BackgroundService
 
         if (response is not null)
         {
-            await _botClient!.SendTextMessageAsync(
+            await _botClient!.SendMessage(
                 message.Chat.Id,
                 response,
                 parseMode: ParseMode.Markdown,
@@ -124,7 +124,7 @@ public class TelegramBotService : BackgroundService
             var success = await orderManager.ApproveOrderAsync(token);
             var resultText = success ? "Order approved and executed" : "Order approval failed or expired";
 
-            await _botClient!.AnswerCallbackQueryAsync(callback.Id, resultText, cancellationToken: ct);
+            await _botClient!.AnswerCallbackQuery(callback.Id, resultText, cancellationToken: ct);
         }
         else if (data.StartsWith("reject:"))
         {
@@ -134,7 +134,7 @@ public class TelegramBotService : BackgroundService
 
             await orderManager.RejectOrderAsync(token);
 
-            await _botClient!.AnswerCallbackQueryAsync(callback.Id, "Order rejected", cancellationToken: ct);
+            await _botClient!.AnswerCallbackQuery(callback.Id, "Order rejected", cancellationToken: ct);
         }
     }
 
@@ -148,7 +148,7 @@ public class TelegramBotService : BackgroundService
     {
         if (_botClient is null) return;
 
-        await _botClient.SendTextMessageAsync(
+        await _botClient.SendMessage(
             _authorizedChatId,
             message,
             parseMode: ParseMode.Markdown);
@@ -167,7 +167,7 @@ public class TelegramBotService : BackgroundService
             {(alert.AiEnrichment is not null ? $"_Context: {alert.AiEnrichment}_" : "")}
             """;
 
-        await _botClient.SendTextMessageAsync(
+        await _botClient.SendMessage(
             _authorizedChatId,
             message,
             parseMode: ParseMode.Markdown);
@@ -199,7 +199,7 @@ public class TelegramBotService : BackgroundService
             }
         });
 
-        await _botClient.SendTextMessageAsync(
+        await _botClient.SendMessage(
             _authorizedChatId,
             message,
             parseMode: ParseMode.Markdown,

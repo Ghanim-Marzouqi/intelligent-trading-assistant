@@ -1,6 +1,4 @@
 using Microsoft.EntityFrameworkCore;
-using OpenTelemetry.Metrics;
-using OpenTelemetry.Resources;
 using Serilog;
 using TradingAssistant.Api.Data;
 using TradingAssistant.Api.Hubs;
@@ -17,40 +15,42 @@ var builder = WebApplication.CreateBuilder(args);
 Log.Logger = new LoggerConfiguration()
     .ReadFrom.Configuration(builder.Configuration)
     .Enrich.FromLogContext()
-    .Enrich.WithProperty("Application", "TradingAssistant")
     .WriteTo.Console()
-    .WriteTo.Seq(builder.Configuration["Seq:Url"] ?? "http://localhost:5341")
     .CreateLogger();
 
 builder.Host.UseSerilog();
 
-// Database
-builder.Services.AddDbContext<AppDbContext>(options =>
-    options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
-
-// Redis
-builder.Services.AddStackExchangeRedisCache(options =>
+// Database - SQLite for dev, PostgreSQL for production
+var connectionString = builder.Configuration.GetConnectionString("DefaultConnection") ?? "";
+if (builder.Environment.IsDevelopment() && connectionString.Contains(".db"))
 {
-    options.Configuration = builder.Configuration.GetConnectionString("Redis") ?? "redis:6379";
-    options.InstanceName = "TradingAssistant:";
-});
+    builder.Services.AddDbContext<AppDbContext>(options =>
+        options.UseSqlite(connectionString));
+}
+else
+{
+    builder.Services.AddDbContext<AppDbContext>(options =>
+        options.UseNpgsql(connectionString));
+}
 
-// OpenTelemetry Metrics
-builder.Services.AddOpenTelemetry()
-    .ConfigureResource(resource => resource.AddService("TradingAssistant.Api"))
-    .WithMetrics(metrics =>
+// Cache - In-memory for dev, Redis for production
+if (builder.Configuration.GetValue<bool>("UseInMemoryCache"))
+{
+    builder.Services.AddDistributedMemoryCache();
+}
+else
+{
+    builder.Services.AddStackExchangeRedisCache(options =>
     {
-        metrics
-            .AddAspNetCoreInstrumentation()
-            .AddHttpClientInstrumentation()
-            .AddRuntimeInstrumentation()
-            .AddPrometheusExporter();
+        options.Configuration = builder.Configuration.GetConnectionString("Redis") ?? "localhost:6379";
+        options.InstanceName = "TradingAssistant:";
     });
+}
 
 // SignalR
 builder.Services.AddSignalR();
 
-// Controllers
+// Controllers & Swagger
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
@@ -68,41 +68,34 @@ builder.Services.AddCors(options =>
     });
 });
 
-// Health Checks
-builder.Services.AddHealthChecks()
-    .AddNpgSql(builder.Configuration.GetConnectionString("DefaultConnection")!)
-    .AddRedis(builder.Configuration.GetConnectionString("Redis") ?? "redis:6379");
-
-// Application Services
+// cTrader Services
 builder.Services.AddSingleton<ICTraderAuthService, CTraderAuthService>();
 builder.Services.AddHostedService<CTraderApiAdapter>();
 builder.Services.AddSingleton<ICTraderPriceStream, CTraderPriceStream>();
 builder.Services.AddSingleton<ICTraderAccountStream, CTraderAccountStream>();
 builder.Services.AddScoped<ICTraderOrderExecutor, CTraderOrderExecutor>();
 
+// Alert Services
 builder.Services.AddHostedService<AlertEngine>();
 builder.Services.AddScoped<IAlertRuleRepository, AlertRuleRepository>();
 
+// Journal Services
 builder.Services.AddScoped<ITradeJournalService, TradeJournalService>();
 builder.Services.AddScoped<ITradeEnricher, TradeEnricher>();
 builder.Services.AddScoped<IAnalyticsAggregator, AnalyticsAggregator>();
 
+// Order Services
 builder.Services.AddScoped<IOrderManager, OrderManager>();
 builder.Services.AddScoped<IPositionSizer, PositionSizer>();
 builder.Services.AddScoped<IRiskGuard, RiskGuard>();
 
-builder.Services.AddScoped<IAiAnalysisService, OpenCodeZenService>();
+// AI Services
+builder.Services.AddHttpClient<IAiAnalysisService, OpenCodeZenService>();
 
+// Notification Services
 builder.Services.AddSingleton<INotificationService, NotificationService>();
 builder.Services.AddHostedService<TelegramBotService>();
-builder.Services.AddScoped<IWhatsAppService, WhatsAppService>();
-
-// HTTP Clients with Polly resilience
-builder.Services.AddHttpClient<IWhatsAppService, WhatsAppService>()
-    .AddStandardResilienceHandler();
-
-builder.Services.AddHttpClient<IAiAnalysisService, OpenCodeZenService>()
-    .AddStandardResilienceHandler();
+builder.Services.AddHttpClient<IWhatsAppService, WhatsAppService>();
 
 var app = builder.Build();
 
@@ -118,14 +111,13 @@ app.UseCors("TradingUI");
 
 app.MapControllers();
 app.MapHub<TradingHub>("/hub");
-app.MapHealthChecks("/health");
-app.MapPrometheusScrapingEndpoint("/metrics");
 
-// Apply migrations on startup
-using (var scope = app.Services.CreateScope())
+// Auto-create database in development
+if (app.Environment.IsDevelopment())
 {
+    using var scope = app.Services.CreateScope();
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-    await db.Database.MigrateAsync();
+    db.Database.EnsureCreated();
 }
 
 Log.Information("Trading Assistant API started");

@@ -31,19 +31,19 @@ public class OpenCodeZenService : IAiAnalysisService
     {
         _logger.LogInformation("Analyzing market for {Symbol} on {Timeframe}", symbol, timeframe);
 
-        var prompt = $"""
-            Analyze the current market conditions for {symbol} on the {timeframe} timeframe.
+        var prompt = $$"""
+            Analyze the current market conditions for {{symbol}} on the {{timeframe}} timeframe.
 
             Provide your analysis in the following JSON format:
-            {{
-                "pair": "{symbol}",
+            {
+                "pair": "{{symbol}}",
                 "bias": "bullish|bearish|neutral",
                 "confidence": 0.0-1.0,
-                "key_levels": {{ "support": 0.0, "resistance": 0.0 }},
+                "key_levels": { "support": 0.0, "resistance": 0.0 },
                 "risk_events": ["event1", "event2"],
                 "recommendation": "buy|sell|wait|reduce_exposure",
                 "reasoning": "detailed explanation"
-            }}
+            }
             """;
 
         var response = await CallApiAsync(prompt);
@@ -95,28 +95,29 @@ public class OpenCodeZenService : IAiAnalysisService
 
         _logger.LogInformation("Reviewing trade {TradeId}", tradeId);
 
-        var prompt = $"""
+        var tagsStr = string.Join(", ", trade.Tags.Select(t => t.Name));
+        var prompt = $$"""
             Review this trade and provide feedback:
 
-            Symbol: {trade.Symbol}
-            Direction: {trade.Direction}
-            Entry: {trade.EntryPrice}
-            Exit: {trade.ExitPrice}
-            Stop Loss: {trade.StopLoss}
-            Take Profit: {trade.TakeProfit}
-            PnL: {trade.NetPnL}
-            Duration: {trade.Duration}
-            R:R Ratio: {trade.RiskRewardRatio}
-            Tags: {string.Join(", ", trade.Tags.Select(t => t.Name))}
+            Symbol: {{trade.Symbol}}
+            Direction: {{trade.Direction}}
+            Entry: {{trade.EntryPrice}}
+            Exit: {{trade.ExitPrice}}
+            Stop Loss: {{trade.StopLoss}}
+            Take Profit: {{trade.TakeProfit}}
+            PnL: {{trade.NetPnL}}
+            Duration: {{trade.Duration}}
+            R:R Ratio: {{trade.RiskRewardRatio}}
+            Tags: {{tagsStr}}
 
             Provide your review in the following JSON format:
-            {{
+            {
                 "assessment": "overall assessment",
                 "strengths": ["strength1", "strength2"],
                 "weaknesses": ["weakness1", "weakness2"],
                 "improvements": ["improvement1", "improvement2"],
                 "score": 1-10
-            }}
+            }
             """;
 
         var response = await CallApiAsync(prompt);
@@ -168,19 +169,18 @@ public class OpenCodeZenService : IAiAnalysisService
     {
         _logger.LogDebug("Analyzing news sentiment for {Symbol}", symbol);
 
-        // TODO: Integrate with news RSS feeds to fetch actual news
-        var prompt = $"""
-            Analyze the current news sentiment for {symbol}.
+        var prompt = $$"""
+            Analyze the current news sentiment for {{symbol}}.
 
             Provide your analysis in the following JSON format:
-            {{
-                "symbol": "{symbol}",
+            {
+                "symbol": "{{symbol}}",
                 "overall_sentiment": "bullish|bearish|neutral|mixed",
-                "sentiment_score": -1.0 to 1.0,
+                "sentiment_score": -1.0,
                 "relevant_news": [
-                    {{ "title": "...", "source": "...", "sentiment": "...", "published_at": "..." }}
+                    { "title": "...", "source": "...", "sentiment": "...", "published_at": "..." }
                 ]
-            }}
+            }
             """;
 
         var response = await CallApiAsync(prompt);

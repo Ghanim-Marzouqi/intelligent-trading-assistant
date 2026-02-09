@@ -25,8 +25,9 @@ public class AlertRuleRepository : IAlertRuleRepository
     public async Task<IEnumerable<AlertRule>> GetActiveRulesAsync(string? symbol = null)
     {
         var query = _db.AlertRules
+            .Include(r => r.Conditions)
             .Where(r => r.IsActive)
-            .Include(r => r.Conditions);
+            .AsQueryable();
 
         if (!string.IsNullOrEmpty(symbol))
             query = query.Where(r => r.Symbol == symbol.ToUpperInvariant());
