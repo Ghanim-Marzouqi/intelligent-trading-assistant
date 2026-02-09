@@ -1,0 +1,55 @@
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# .NET
+bin/
+obj/
+*.user
+*.userosscache
+*.suo
+*.cache
+*.log
+*.vs/
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Angular
+dist/
+.angular/
+.sass-cache/
+
+# Docker
+docker-compose.override.yml
+
+# Logs
+logs/
+*.log
+
+# Database
+pgdata/
+
+# SSL certificates
+*.pem
+*.key
+*.crt
+acme.json
+
+# Backups
+backups/
+
+# Secrets
+secrets/
+credentials.json

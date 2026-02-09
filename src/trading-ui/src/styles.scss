@@ -1,0 +1,112 @@
+:root {
+  --primary: #3b82f6;
+  --primary-dark: #2563eb;
+  --success: #10b981;
+  --danger: #ef4444;
+  --warning: #f59e0b;
+  --background: #0f172a;
+  --surface: #1e293b;
+  --surface-light: #334155;
+  --text: #f8fafc;
+  --text-muted: #94a3b8;
+  --border: #475569;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body {
+  height: 100%;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  background-color: var(--background);
+  color: var(--text);
+  line-height: 1.5;
+}
+
+a {
+  color: var(--primary);
+  text-decoration: none;
+
+  &:hover {
+    color: var(--primary-dark);
+  }
+}
+
+button {
+  cursor: pointer;
+  border: none;
+  border-radius: 6px;
+  padding: 8px 16px;
+  font-size: 14px;
+  font-weight: 500;
+  transition: all 0.2s;
+
+  &.primary {
+    background: var(--primary);
+    color: white;
+
+    &:hover {
+      background: var(--primary-dark);
+    }
+  }
+
+  &.success {
+    background: var(--success);
+    color: white;
+  }
+
+  &.danger {
+    background: var(--danger);
+    color: white;
+  }
+}
+
+.card {
+  background: var(--surface);
+  border-radius: 12px;
+  padding: 20px;
+  border: 1px solid var(--border);
+}
+
+.positive {
+  color: var(--success);
+}
+
+.negative {
+  color: var(--danger);
+}
+
+input, select {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  color: var(--text);
+  font-size: 14px;
+
+  &:focus {
+    outline: none;
+    border-color: var(--primary);
+  }
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+
+  th, td {
+    padding: 12px;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+  }
+
+  th {
+    color: var(--text-muted);
+    font-weight: 500;
+    font-size: 12px;
+    text-transform: uppercase;
+  }
+}

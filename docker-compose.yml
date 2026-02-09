@@ -1,0 +1,114 @@
+services:
+  traefik:
+    image: traefik:v3.6
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik:/etc/traefik
+      - traefik-certs:/letsencrypt
+    networks:
+      - trading-network
+    restart: unless-stopped
+
+  trading-api:
+    build: ./src/TradingAssistant.Api
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - ConnectionStrings__DefaultConnection=Host=postgres;Database=trading_assistant;Username=${DB_USER};Password=${DB_PASSWORD};Pooling=true;MinPoolSize=10;MaxPoolSize=100
+      - CTrader__Environment=${CTRADER_ENVIRONMENT}
+      - CTrader__AccountId=${CTRADER_ACCOUNT_ID}
+      - CTrader__ClientId=${CTRADER_CLIENT_ID}
+      - CTrader__ClientSecret=${CTRADER_CLIENT_SECRET}
+      - Telegram__BotToken=${TELEGRAM_BOT_TOKEN}
+      - Telegram__ChatId=${TELEGRAM_CHAT_ID}
+      - WhatsApp__PhoneNumberId=${WHATSAPP_PHONE_NUMBER_ID}
+      - WhatsApp__AccessToken=${WHATSAPP_ACCESS_TOKEN}
+      - AiProvider__ApiKey=${OPENCODE_ZEN_API_KEY}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.api.rule=Host(`api.trading.yourdomain.com`)"
+      - "traefik.http.routers.api.tls.certresolver=letsencrypt"
+      - "traefik.http.services.api.loadbalancer.server.port=8080"
+    networks:
+      - trading-network
+    restart: unless-stopped
+
+  trading-ui:
+    build: ./src/trading-ui
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.ui.rule=Host(`trading.yourdomain.com`)"
+      - "traefik.http.routers.ui.tls.certresolver=letsencrypt"
+      - "traefik.http.services.ui.loadbalancer.server.port=80"
+    networks:
+      - trading-network
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      - POSTGRES_DB=trading_assistant
+      - POSTGRES_USER=${DB_USER}
+      - POSTGRES_PASSWORD=${DB_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d trading_assistant"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - trading-network
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+    volumes:
+      - redisdata:/data
+    networks:
+      - trading-network
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheusdata:/prometheus
+    networks:
+      - trading-network
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD}
+    volumes:
+      - grafanadata:/var/lib/grafana
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.grafana.rule=Host(`grafana.trading.yourdomain.com`)"
+      - "traefik.http.routers.grafana.tls.certresolver=letsencrypt"
+      - "traefik.http.services.grafana.loadbalancer.server.port=3000"
+    networks:
+      - trading-network
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  redisdata:
+  traefik-certs:
+  prometheusdata:
+  grafanadata:
+
+networks:
+  trading-network:
+    driver: bridge
