@@ -1,9 +1,15 @@
+using System.Text;
+using System.Text.RegularExpressions;
+using Microsoft.EntityFrameworkCore;
 using Telegram.Bot;
 using Telegram.Bot.Polling;
 using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
 using Telegram.Bot.Types.ReplyMarkups;
+using TradingAssistant.Api.Data;
 using TradingAssistant.Api.Models.Alerts;
+using TradingAssistant.Api.Models.Trading;
+using TradingAssistant.Api.Services.Alerts;
 using TradingAssistant.Api.Services.Orders;
 
 namespace TradingAssistant.Api.Services.Notifications;
@@ -250,52 +256,296 @@ public class TelegramBotService : BackgroundService
 
     private async Task<string> GetStatusAsync()
     {
-        // TODO: Fetch real account data
-        return """
-            *Account Status*
-            Balance: $10,000.00
-            Equity: $10,150.00
-            Margin: $500.00
-            Free Margin: $9,650.00
-            Open P&L: +$150.00
-            """;
+        try
+        {
+            using var scope = _serviceProvider.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+            var account = await db.Accounts
+                .OrderByDescending(a => a.LastSyncAt)
+                .FirstOrDefaultAsync();
+
+            if (account is null)
+                return "*Account Status*\n_No account data available_";
+
+            var pnlSign = account.UnrealizedPnL >= 0 ? "+" : "";
+            return $"""
+                *Account Status*
+                Balance: {account.Currency} {account.Balance:N2}
+                Equity: {account.Currency} {account.Equity:N2}
+                Margin: {account.Currency} {account.Margin:N2}
+                Free Margin: {account.Currency} {account.FreeMargin:N2}
+                Open P&L: {pnlSign}{account.Currency} {account.UnrealizedPnL:N2}
+                _Last sync: {account.LastSyncAt:yyyy-MM-dd HH:mm} UTC_
+                """;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error fetching account status");
+            return "*Account Status*\n_Error fetching data_";
+        }
     }
 
     private async Task<string> GetPositionsAsync()
     {
-        // TODO: Fetch real positions
-        return "*No open positions*";
+        try
+        {
+            using var scope = _serviceProvider.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+            var positions = await db.Positions
+                .Where(p => p.Status == PositionStatus.Open)
+                .OrderByDescending(p => p.OpenTime)
+                .ToListAsync();
+
+            if (positions.Count == 0)
+                return "*No open positions*";
+
+            var sb = new StringBuilder("*Open Positions*\n\n");
+            var totalPnL = 0m;
+
+            foreach (var p in positions)
+            {
+                var pnlSign = p.UnrealizedPnL >= 0 ? "+" : "";
+                sb.AppendLine($"*{p.Symbol}* {p.Direction} {p.Volume} lots");
+                sb.AppendLine($"  Entry: {p.EntryPrice} | Current: {p.CurrentPrice}");
+                sb.AppendLine($"  PnL: {pnlSign}${p.UnrealizedPnL:N2}");
+                sb.AppendLine();
+                totalPnL += p.UnrealizedPnL;
+            }
+
+            var totalSign = totalPnL >= 0 ? "+" : "";
+            sb.AppendLine($"*Total:* {totalSign}${totalPnL:N2} ({positions.Count} positions)");
+
+            return sb.ToString();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error fetching positions");
+            return "*Positions*\n_Error fetching data_";
+        }
     }
 
     private async Task<string> GetAlertsAsync()
     {
-        // TODO: Fetch real alerts
-        return "*No active alerts*";
+        try
+        {
+            using var scope = _serviceProvider.CreateScope();
+            var repo = scope.ServiceProvider.GetRequiredService<IAlertRuleRepository>();
+
+            var rules = (await repo.GetActiveRulesAsync()).ToList();
+
+            if (rules.Count == 0)
+                return "*No active alerts*";
+
+            var sb = new StringBuilder($"*Active Alerts ({rules.Count})*\n\n");
+
+            foreach (var r in rules)
+            {
+                sb.AppendLine($"#{r.Id} *{r.Name}*");
+                sb.AppendLine($"  {r.Symbol} | {r.Type} | Triggered: {r.TriggerCount}x");
+                sb.AppendLine();
+            }
+
+            return sb.ToString();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error fetching alerts");
+            return "*Alerts*\n_Error fetching data_";
+        }
     }
 
     private async Task<string> GetTodaySummaryAsync()
     {
-        // TODO: Fetch real stats
-        return "*Today: No trades yet*";
+        try
+        {
+            using var scope = _serviceProvider.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+            var today = DateTime.UtcNow.Date;
+
+            var stats = await db.DailyStats
+                .Where(s => s.Date == today)
+                .FirstOrDefaultAsync();
+
+            if (stats is not null)
+            {
+                var pnlSign = stats.TotalPnL >= 0 ? "+" : "";
+                return $"""
+                    *Today's Summary*
+                    Trades: {stats.TotalTrades} ({stats.WinningTrades}W / {stats.LosingTrades}L)
+                    Win Rate: {stats.WinRate:N1}%
+                    P&L: {pnlSign}${stats.TotalPnL:N2}
+                    Best: +${stats.LargestWin:N2}
+                    Worst: -${Math.Abs(stats.LargestLoss):N2}
+                    """;
+            }
+
+            // Fallback: aggregate from TradeEntries closed today
+            var trades = await db.TradeEntries
+                .Where(t => t.CloseTime >= today)
+                .ToListAsync();
+
+            if (trades.Count == 0)
+                return "*Today: No trades yet*";
+
+            var wins = trades.Count(t => t.NetPnL > 0);
+            var losses = trades.Count(t => t.NetPnL <= 0);
+            var totalPnL = trades.Sum(t => t.NetPnL);
+            var best = trades.Max(t => t.NetPnL);
+            var worst = trades.Min(t => t.NetPnL);
+            var winRate = trades.Count > 0 ? (decimal)wins / trades.Count * 100 : 0;
+            var pnl = totalPnL >= 0 ? "+" : "";
+
+            return $"""
+                *Today's Summary*
+                Trades: {trades.Count} ({wins}W / {losses}L)
+                Win Rate: {winRate:N1}%
+                P&L: {pnl}${totalPnL:N2}
+                Best: ${best:N2}
+                Worst: ${worst:N2}
+                """;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error fetching today's summary");
+            return "*Today*\n_Error fetching data_";
+        }
     }
 
     private async Task<string> GetWeekSummaryAsync()
     {
-        // TODO: Fetch real stats
-        return "*This Week: No trades yet*";
+        try
+        {
+            using var scope = _serviceProvider.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+            var weekStart = DateTime.UtcNow.Date.AddDays(-6);
+
+            var dailyStats = await db.DailyStats
+                .Where(s => s.Date >= weekStart)
+                .OrderBy(s => s.Date)
+                .ToListAsync();
+
+            if (dailyStats.Count > 0)
+            {
+                var totalTrades = dailyStats.Sum(s => s.TotalTrades);
+                var totalWins = dailyStats.Sum(s => s.WinningTrades);
+                var totalLosses = dailyStats.Sum(s => s.LosingTrades);
+                var totalPnL = dailyStats.Sum(s => s.TotalPnL);
+                var winRate = totalTrades > 0 ? (decimal)totalWins / totalTrades * 100 : 0;
+                var bestDay = dailyStats.MaxBy(s => s.TotalPnL)!;
+                var worstDay = dailyStats.MinBy(s => s.TotalPnL)!;
+                var pnlSign = totalPnL >= 0 ? "+" : "";
+
+                return $"""
+                    *This Week (7 days)*
+                    Trades: {totalTrades} ({totalWins}W / {totalLosses}L)
+                    Win Rate: {winRate:N1}%
+                    P&L: {pnlSign}${totalPnL:N2}
+                    Best Day: {bestDay.Date:ddd MM/dd} ({(bestDay.TotalPnL >= 0 ? "+" : "")}${bestDay.TotalPnL:N2})
+                    Worst Day: {worstDay.Date:ddd MM/dd} ({(worstDay.TotalPnL >= 0 ? "+" : "")}${worstDay.TotalPnL:N2})
+                    """;
+            }
+
+            // Fallback: aggregate from TradeEntries closed this week
+            var trades = await db.TradeEntries
+                .Where(t => t.CloseTime >= weekStart)
+                .ToListAsync();
+
+            if (trades.Count == 0)
+                return "*This Week: No trades yet*";
+
+            var w = trades.Count(t => t.NetPnL > 0);
+            var l = trades.Count(t => t.NetPnL <= 0);
+            var pnl = trades.Sum(t => t.NetPnL);
+            var wr = trades.Count > 0 ? (decimal)w / trades.Count * 100 : 0;
+            var sign = pnl >= 0 ? "+" : "";
+
+            return $"""
+                *This Week (7 days)*
+                Trades: {trades.Count} ({w}W / {l}L)
+                Win Rate: {wr:N1}%
+                P&L: {sign}${pnl:N2}
+                """;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error fetching week summary");
+            return "*This Week*\n_Error fetching data_";
+        }
     }
 
     private async Task<string> GetCalendarAsync()
     {
-        // TODO: Integrate economic calendar
+        // No data source exists for economic calendar yet
         return "*No high-impact events today*";
     }
 
+    private static readonly Regex AlertPattern = new(
+        @"^(\w+)\s*(>=|<=|>|<)\s*(\d+\.?\d*)$",
+        RegexOptions.Compiled);
+
     private async Task<string> CreateQuickAlertAsync(string alertSpec)
     {
-        // Parse: EURUSD > 1.0900
-        // TODO: Implement quick alert creation
-        return $"_Alert creation not yet implemented: {alertSpec}_";
+        try
+        {
+            var match = AlertPattern.Match(alertSpec.Trim());
+            if (!match.Success)
+                return "_Invalid format. Use:_ `/alert EURUSD > 1.0900`";
+
+            var symbol = match.Groups[1].Value.ToUpperInvariant();
+            var op = match.Groups[2].Value;
+            var value = decimal.Parse(match.Groups[3].Value);
+
+            var compOp = op switch
+            {
+                ">" => ComparisonOperator.GreaterThan,
+                "<" => ComparisonOperator.LessThan,
+                ">=" => ComparisonOperator.GreaterOrEqual,
+                "<=" => ComparisonOperator.LessOrEqual,
+                _ => ComparisonOperator.GreaterThan
+            };
+
+            var rule = new AlertRule
+            {
+                Symbol = symbol,
+                Name = $"{symbol} {op} {value}",
+                Type = AlertType.Price,
+                IsActive = true,
+                NotifyTelegram = true,
+                NotifyDashboard = true,
+                MaxTriggers = 1,
+                Conditions = [
+                    new AlertCondition
+                    {
+                        Type = ConditionType.PriceLevel,
+                        Indicator = "Price",
+                        Operator = compOp,
+                        Value = value
+                    }
+                ]
+            };
+
+            using var scope = _serviceProvider.CreateScope();
+            var repo = scope.ServiceProvider.GetRequiredService<IAlertRuleRepository>();
+            var created = await repo.CreateAsync(rule);
+
+            var alertEngine = _serviceProvider.GetRequiredService<AlertEngine>();
+            alertEngine.AddRule(created);
+
+            return $"""
+                *Alert Created* #{created.Id}
+                {symbol} {op} {value}
+                _One-shot alert — will trigger once then deactivate_
+                """;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error creating quick alert from: {Spec}", alertSpec);
+            return "_Error creating alert. Check the format:_ `/alert EURUSD > 1.0900`";
+        }
     }
 
     private string GetHelpText() => """

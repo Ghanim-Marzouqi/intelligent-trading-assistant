@@ -68,7 +68,8 @@ builder.Services.AddSingleton<ICTraderAccountStream, CTraderAccountStream>();
 builder.Services.AddScoped<ICTraderOrderExecutor, CTraderOrderExecutor>();
 
 // Alert Services
-builder.Services.AddHostedService<AlertEngine>();
+builder.Services.AddSingleton<AlertEngine>();
+builder.Services.AddHostedService<AlertEngine>(sp => sp.GetRequiredService<AlertEngine>());
 builder.Services.AddScoped<IAlertRuleRepository, AlertRuleRepository>();
 
 // Journal Services

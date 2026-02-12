@@ -3,10 +3,11 @@ FROM node:20-alpine AS build
 WORKDIR /app
 
 COPY package*.json ./
-RUN npm ci
+RUN npm ci --legacy-peer-deps
 
 COPY . .
-RUN npm run build -- --configuration production
+ARG BUILD_CONFIG=production
+RUN npm run build -- --configuration ${BUILD_CONFIG}
 
 # Production stage
 FROM nginx:alpine

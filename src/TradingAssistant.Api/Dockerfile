@@ -14,9 +14,8 @@ RUN dotnet publish -c Release -o /app/publish
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
 WORKDIR /app
 
-# Create non-root user for security
-RUN adduser --disabled-password --gecos '' appuser
-USER appuser
+# Run as built-in non-root user
+USER app
 
 COPY --from=build /app/publish .
 

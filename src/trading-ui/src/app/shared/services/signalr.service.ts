@@ -31,6 +31,7 @@ export interface PositionUpdate {
 export interface AccountUpdate {
   balance: number;
   equity: number;
+  unrealizedPnL: number;
   margin: number;
   freeMargin: number;
   marginLevel: number;
