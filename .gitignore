@@ -13,6 +13,7 @@
 # .NET
 bin/
 obj/
+appsettings.Development.json
 *.user
 *.userosscache
 *.suo

@@ -8,6 +8,7 @@ using TradingAssistant.Api.Services.CTrader;
 using TradingAssistant.Api.Services.Journal;
 using TradingAssistant.Api.Services.Notifications;
 using TradingAssistant.Api.Services.Orders;
+using Prometheus;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -20,32 +21,23 @@ Log.Logger = new LoggerConfiguration()
 
 builder.Host.UseSerilog();
 
-// Database - SQLite for dev, PostgreSQL for production
+// Database - PostgreSQL for all environments
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection") ?? "";
-if (builder.Environment.IsDevelopment() && connectionString.Contains(".db"))
-{
-    builder.Services.AddDbContext<AppDbContext>(options =>
-        options.UseSqlite(connectionString));
-}
-else
-{
-    builder.Services.AddDbContext<AppDbContext>(options =>
-        options.UseNpgsql(connectionString));
-}
+builder.Services.AddDbContext<AppDbContext>(options =>
+    options.UseNpgsql(connectionString));
 
-// Cache - In-memory for dev, Redis for production
-if (builder.Configuration.GetValue<bool>("UseInMemoryCache"))
+// Cache - Redis for all environments
+var redisConnectionString = builder.Configuration.GetConnectionString("Redis") ?? "localhost:6379";
+builder.Services.AddStackExchangeRedisCache(options =>
 {
-    builder.Services.AddDistributedMemoryCache();
-}
-else
-{
-    builder.Services.AddStackExchangeRedisCache(options =>
-    {
-        options.Configuration = builder.Configuration.GetConnectionString("Redis") ?? "localhost:6379";
-        options.InstanceName = "TradingAssistant:";
-    });
-}
+    options.Configuration = redisConnectionString;
+    options.InstanceName = "TradingAssistant:";
+});
+
+// Health checks
+builder.Services.AddHealthChecks()
+    .AddNpgSql(connectionString)
+    .AddRedis(redisConnectionString);
 
 // SignalR
 builder.Services.AddSignalR();
@@ -107,10 +99,13 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseSerilogRequestLogging();
+app.UseHttpMetrics();
 app.UseCors("TradingUI");
 
 app.MapControllers();
 app.MapHub<TradingHub>("/hub");
+app.MapHealthChecks("/health");
+app.MapMetrics();
 
 // Auto-create database in development
 if (app.Environment.IsDevelopment())

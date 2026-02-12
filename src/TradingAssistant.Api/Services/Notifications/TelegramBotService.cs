@@ -38,8 +38,29 @@ public class TelegramBotService : BackgroundService
         _authorizedChatId = _config.GetValue<long>("Telegram:ChatId");
         _botClient = new TelegramBotClient(token);
 
-        var me = await _botClient.GetMe(stoppingToken);
-        _logger.LogInformation("Telegram bot started: @{Username}", me.Username);
+        // Retry GetMe with exponential backoff
+        var attemptCount = 0;
+        const int maxDelaySeconds = 60;
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            try
+            {
+                var me = await _botClient.GetMe(stoppingToken);
+                _logger.LogInformation("Telegram bot started: @{Username}", me.Username);
+                break;
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (Exception ex)
+            {
+                var delay = TimeSpan.FromSeconds(Math.Min(Math.Pow(2, attemptCount), maxDelaySeconds));
+                attemptCount++;
+                _logger.LogError(ex, "Failed to connect to Telegram, retrying in {Delay}...", delay);
+                await Task.Delay(delay, stoppingToken);
+            }
+        }
 
         var receiverOptions = new ReceiverOptions
         {
@@ -148,62 +169,83 @@ public class TelegramBotService : BackgroundService
     {
         if (_botClient is null) return;
 
-        await _botClient.SendMessage(
-            _authorizedChatId,
-            message,
-            parseMode: ParseMode.Markdown);
+        try
+        {
+            await _botClient.SendMessage(
+                _authorizedChatId,
+                message,
+                parseMode: ParseMode.Markdown);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to send Telegram message");
+        }
     }
 
     public async Task SendAlertAsync(AlertTrigger alert)
     {
         if (_botClient is null) return;
 
-        var message = $"""
-            *Alert Triggered*
-            {alert.Symbol} @ {alert.TriggerPrice}
+        try
+        {
+            var message = $"""
+                *Alert Triggered*
+                {alert.Symbol} @ {alert.TriggerPrice}
 
-            {alert.Message}
+                {alert.Message}
 
-            {(alert.AiEnrichment is not null ? $"_Context: {alert.AiEnrichment}_" : "")}
-            """;
+                {(alert.AiEnrichment is not null ? $"_Context: {alert.AiEnrichment}_" : "")}
+                """;
 
-        await _botClient.SendMessage(
-            _authorizedChatId,
-            message,
-            parseMode: ParseMode.Markdown);
+            await _botClient.SendMessage(
+                _authorizedChatId,
+                message,
+                parseMode: ParseMode.Markdown);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to send Telegram alert for {Symbol}", alert.Symbol);
+        }
     }
 
     public async Task SendOrderApprovalAsync(PreparedOrder order)
     {
         if (_botClient is null) return;
 
-        var message = $"""
-            *Order Ready for Approval*
-
-            {order.Symbol} {order.Direction}
-            Volume: {order.Volume} lots
-            Entry: {order.EntryPrice}
-            SL: {order.StopLoss}
-            TP: {order.TakeProfit}
-            Risk: {order.RiskPercent}%
-
-            _Expires in 5 minutes_
-            """;
-
-        var keyboard = new InlineKeyboardMarkup(new[]
+        try
         {
-            new[]
-            {
-                InlineKeyboardButton.WithCallbackData("Approve", $"approve:{order.ApprovalToken}"),
-                InlineKeyboardButton.WithCallbackData("Reject", $"reject:{order.ApprovalToken}")
-            }
-        });
+            var message = $"""
+                *Order Ready for Approval*
 
-        await _botClient.SendMessage(
-            _authorizedChatId,
-            message,
-            parseMode: ParseMode.Markdown,
-            replyMarkup: keyboard);
+                {order.Symbol} {order.Direction}
+                Volume: {order.Volume} lots
+                Entry: {order.EntryPrice}
+                SL: {order.StopLoss}
+                TP: {order.TakeProfit}
+                Risk: {order.RiskPercent}%
+
+                _Expires in 5 minutes_
+                """;
+
+            var keyboard = new InlineKeyboardMarkup(new[]
+            {
+                new[]
+                {
+                    InlineKeyboardButton.WithCallbackData("Approve", $"approve:{order.ApprovalToken}"),
+                    InlineKeyboardButton.WithCallbackData("Reject", $"reject:{order.ApprovalToken}")
+                }
+            });
+
+            await _botClient.SendMessage(
+                _authorizedChatId,
+                message,
+                parseMode: ParseMode.Markdown,
+                replyMarkup: keyboard);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to send Telegram order approval for {Symbol}", order.Symbol);
+        }
     }
 
     private async Task<string> GetStatusAsync()

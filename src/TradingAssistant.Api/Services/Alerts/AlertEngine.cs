@@ -31,18 +31,50 @@ public class AlertEngine : BackgroundService
     {
         _logger.LogInformation("Alert Engine starting...");
 
-        await LoadActiveRulesAsync();
+        // Retry initial rule load with exponential backoff
+        var attemptCount = 0;
+        const int maxDelaySeconds = 60;
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            try
+            {
+                await LoadActiveRulesAsync();
+                break;
+            }
+            catch (Exception ex)
+            {
+                var delay = TimeSpan.FromSeconds(Math.Min(Math.Pow(2, attemptCount), maxDelaySeconds));
+                attemptCount++;
+                _logger.LogError(ex, "Failed to load alert rules, retrying in {Delay}...", delay);
+                await Task.Delay(delay, stoppingToken);
+            }
+        }
 
         _priceStream.OnPriceUpdate += async (sender, args) =>
         {
-            await OnPriceUpdateAsync(args.Symbol, args.Bid);
+            try
+            {
+                await OnPriceUpdateAsync(args.Symbol, args.Bid);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error processing price update for {Symbol}", args.Symbol);
+            }
         };
 
         // Periodically reload rules to pick up changes
         while (!stoppingToken.IsCancellationRequested)
         {
             await Task.Delay(TimeSpan.FromMinutes(1), stoppingToken);
-            await LoadActiveRulesAsync();
+
+            try
+            {
+                await LoadActiveRulesAsync();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to reload alert rules, will retry next cycle");
+            }
         }
     }
 
@@ -119,38 +151,46 @@ public class AlertEngine : BackgroundService
 
     private async Task TriggerAlertAsync(AlertRule rule, decimal triggerPrice)
     {
-        _logger.LogInformation("Alert triggered: {AlertName} for {Symbol} at {Price}",
-            rule.Name, rule.Symbol, triggerPrice);
-
-        using var scope = _serviceProvider.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-
-        var trigger = new AlertTrigger
+        try
         {
-            AlertRuleId = rule.Id,
-            Symbol = rule.Symbol,
-            TriggerPrice = triggerPrice,
-            Message = $"{rule.Name}: {rule.Symbol} reached {triggerPrice}",
-            TriggeredAt = DateTime.UtcNow
-        };
+            _logger.LogInformation("Alert triggered: {AlertName} for {Symbol} at {Price}",
+                rule.Name, rule.Symbol, triggerPrice);
 
-        db.AlertTriggers.Add(trigger);
+            using var scope = _serviceProvider.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
-        rule.TriggerCount++;
-        rule.LastTriggeredAt = DateTime.UtcNow;
+            var trigger = new AlertTrigger
+            {
+                AlertRuleId = rule.Id,
+                Symbol = rule.Symbol,
+                TriggerPrice = triggerPrice,
+                Message = $"{rule.Name}: {rule.Symbol} reached {triggerPrice}",
+                TriggeredAt = DateTime.UtcNow
+            };
 
-        // Deactivate if max triggers reached
-        if (rule.MaxTriggers.HasValue && rule.TriggerCount >= rule.MaxTriggers.Value)
-        {
-            rule.IsActive = false;
-            _logger.LogInformation("Alert {AlertName} deactivated after {Count} triggers",
-                rule.Name, rule.TriggerCount);
+            db.AlertTriggers.Add(trigger);
+
+            rule.TriggerCount++;
+            rule.LastTriggeredAt = DateTime.UtcNow;
+
+            // Deactivate if max triggers reached
+            if (rule.MaxTriggers.HasValue && rule.TriggerCount >= rule.MaxTriggers.Value)
+            {
+                rule.IsActive = false;
+                _logger.LogInformation("Alert {AlertName} deactivated after {Count} triggers",
+                    rule.Name, rule.TriggerCount);
+            }
+
+            await db.SaveChangesAsync();
+
+            // Send notifications
+            await _notificationService.SendAlertAsync(trigger);
         }
-
-        await db.SaveChangesAsync();
-
-        // Send notifications
-        await _notificationService.SendAlertAsync(trigger);
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to trigger alert {AlertName} for {Symbol} at {Price}",
+                rule.Name, rule.Symbol, triggerPrice);
+        }
     }
 
     public void AddRule(AlertRule rule)
