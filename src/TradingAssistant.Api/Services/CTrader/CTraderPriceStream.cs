@@ -1,5 +1,7 @@
 using System.Collections.Concurrent;
+using System.Reactive.Linq;
 using Microsoft.AspNetCore.SignalR;
+using OpenAPI.Net;
 using TradingAssistant.Api.Hubs;
 
 namespace TradingAssistant.Api.Services.CTrader;
@@ -15,17 +17,25 @@ public interface ICTraderPriceStream
 
 public class CTraderPriceStream : ICTraderPriceStream
 {
+    private readonly ICTraderConnectionManager _connectionManager;
+    private readonly ICTraderSymbolResolver _symbolResolver;
     private readonly IHubContext<TradingHub, ITradingHubClient> _hubContext;
     private readonly ILogger<CTraderPriceStream> _logger;
     private readonly ConcurrentDictionary<string, decimal> _lastPrices = new();
     private readonly HashSet<string> _subscribedSymbols = [];
 
+    private IDisposable? _spotSubscription;
+
     public event EventHandler<PriceUpdateEventArgs>? OnPriceUpdate;
 
     public CTraderPriceStream(
+        ICTraderConnectionManager connectionManager,
+        ICTraderSymbolResolver symbolResolver,
         IHubContext<TradingHub, ITradingHubClient> hubContext,
         ILogger<CTraderPriceStream> logger)
     {
+        _connectionManager = connectionManager;
+        _symbolResolver = symbolResolver;
         _hubContext = hubContext;
         _logger = logger;
     }
@@ -34,45 +44,101 @@ public class CTraderPriceStream : ICTraderPriceStream
     {
         _logger.LogInformation("Price stream starting...");
 
-        // TODO: Connect to cTrader price stream via gRPC
-        // Subscribe to ProtoOASubscribeSpotsReq for each symbol
+        var client = await _connectionManager.GetClientAsync(cancellationToken);
 
-        await Task.CompletedTask;
+        _spotSubscription = client.OfType<ProtoOASpotEvent>().Subscribe(
+            async spotEvent =>
+            {
+                try
+                {
+                    await HandleSpotEventAsync(spotEvent);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Error handling spot event for symbol {SymbolId}", spotEvent.SymbolId);
+                }
+            },
+            error => _logger.LogError(error, "Price stream error"));
+
+        _logger.LogInformation("Price stream started — listening for spot events");
     }
 
-    public async Task StopAsync()
+    public Task StopAsync()
     {
         _logger.LogInformation("Price stream stopping...");
+        _spotSubscription?.Dispose();
+        _spotSubscription = null;
         _subscribedSymbols.Clear();
-        await Task.CompletedTask;
+        return Task.CompletedTask;
     }
 
     public async Task SubscribeAsync(string symbol)
     {
         symbol = symbol.ToUpperInvariant();
 
-        if (_subscribedSymbols.Add(symbol))
-        {
-            _logger.LogDebug("Subscribed to {Symbol}", symbol);
+        if (!_subscribedSymbols.Add(symbol))
+            return;
 
-            // TODO: Send ProtoOASubscribeSpotsReq to cTrader
+        if (!_symbolResolver.TryGetSymbolId(symbol, out var symbolId))
+        {
+            _logger.LogWarning("Cannot subscribe to {Symbol}: unknown symbol", symbol);
+            _subscribedSymbols.Remove(symbol);
+            return;
         }
 
-        await Task.CompletedTask;
+        var client = await _connectionManager.GetClientAsync();
+        var accountId = _connectionManager.AccountId;
+
+        var req = new ProtoOASubscribeSpotsReq
+        {
+            CtidTraderAccountId = accountId
+        };
+        req.SymbolId.Add(symbolId);
+
+        await client.SendMessage(req, ProtoOAPayloadType.ProtoOaSubscribeSpotsReq);
+
+        _logger.LogDebug("Subscribed to spot prices for {Symbol} (ID={SymbolId})", symbol, symbolId);
     }
 
     public async Task UnsubscribeAsync(string symbol)
     {
         symbol = symbol.ToUpperInvariant();
 
-        if (_subscribedSymbols.Remove(symbol))
+        if (!_subscribedSymbols.Remove(symbol))
+            return;
+
+        if (!_symbolResolver.TryGetSymbolId(symbol, out var symbolId))
+            return;
+
+        var client = await _connectionManager.GetClientAsync();
+        var accountId = _connectionManager.AccountId;
+
+        var req = new ProtoOAUnsubscribeSpotsReq
         {
-            _logger.LogDebug("Unsubscribed from {Symbol}", symbol);
+            CtidTraderAccountId = accountId
+        };
+        req.SymbolId.Add(symbolId);
 
-            // TODO: Send ProtoOAUnsubscribeSpotsReq to cTrader
-        }
+        await client.SendMessage(req, ProtoOAPayloadType.ProtoOaUnsubscribeSpotsReq);
 
-        await Task.CompletedTask;
+        _logger.LogDebug("Unsubscribed from spot prices for {Symbol}", symbol);
+    }
+
+    private async Task HandleSpotEventAsync(ProtoOASpotEvent spotEvent)
+    {
+        var symbolName = _symbolResolver.GetSymbolName(spotEvent.SymbolId);
+        var digits = _symbolResolver.GetDigits(spotEvent.SymbolId);
+
+        var bid = spotEvent.HasBid
+            ? CTraderConversions.PriceToDecimal(spotEvent.Bid, digits)
+            : _lastPrices.GetValueOrDefault(symbolName);
+        var ask = spotEvent.HasAsk
+            ? CTraderConversions.PriceToDecimal(spotEvent.Ask, digits)
+            : bid;
+
+        if (bid == 0) return;
+
+        await HandlePriceUpdate(symbolName, bid, ask);
     }
 
     private async Task HandlePriceUpdate(string symbol, decimal bid, decimal ask)

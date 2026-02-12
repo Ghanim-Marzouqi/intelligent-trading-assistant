@@ -18,6 +18,7 @@ public class AppDbContext : DbContext
     public DbSet<Deal> Deals => Set<Deal>();
     public DbSet<Symbol> Symbols => Set<Symbol>();
     public DbSet<Account> Accounts => Set<Account>();
+    public DbSet<CTraderToken> CTraderTokens => Set<CTraderToken>();
 
     // Alerts schema
     public DbSet<AlertRule> AlertRules => Set<AlertRule>();
@@ -44,6 +45,7 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<Deal>().ToTable("deals", "trading");
         modelBuilder.Entity<Symbol>().ToTable("symbols", "trading");
         modelBuilder.Entity<Account>().ToTable("accounts", "trading");
+        modelBuilder.Entity<CTraderToken>().ToTable("ctrader_tokens", "trading");
 
         modelBuilder.Entity<AlertRule>().ToTable("alert_rules", "alerts");
         modelBuilder.Entity<AlertTrigger>().ToTable("alert_triggers", "alerts");
@@ -69,5 +71,10 @@ public class AppDbContext : DbContext
 
         modelBuilder.Entity<DailyStats>()
             .HasIndex(d => d.Date);
+
+        modelBuilder.Entity<Symbol>()
+            .HasIndex(s => s.CTraderSymbolId)
+            .IsUnique()
+            .HasFilter("\"CTraderSymbolId\" > 0");
     }
 }
