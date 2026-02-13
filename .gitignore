@@ -12,6 +12,7 @@
 
 # .NET
 bin/
+bin\*/
 obj/
 appsettings.Development.json
 *.user
@@ -54,3 +55,6 @@ backups/
 # Secrets
 secrets/
 credentials.json
+
+# Temp
+temp/
