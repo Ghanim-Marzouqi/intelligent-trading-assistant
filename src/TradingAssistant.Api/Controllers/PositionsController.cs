@@ -124,12 +124,14 @@ public class PositionsController : ControllerBase
             .ToListAsync();
 
         var unrealizedPnL = openPositions.Sum(p => p.UnrealizedPnL);
+        var equity = account.Equity > 0 ? account.Equity : account.Balance + unrealizedPnL;
+        var freeMargin = equity - openPositions.Sum(p => p.Volume * 1000m);
 
         return new AccountInfo(
             Balance: account.Balance,
-            Equity: account.Equity,
+            Equity: equity,
             UnrealizedPnL: unrealizedPnL,
-            FreeMargin: account.Equity - openPositions.Sum(p => p.Volume * 1000m) // Simplified margin
+            FreeMargin: freeMargin
         );
     }
 

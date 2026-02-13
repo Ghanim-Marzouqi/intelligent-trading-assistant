@@ -15,9 +15,12 @@ FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
 
 # Npgsql requires Kerberos libs for GSSAPI
 USER root
-RUN apt-get update && apt-get install -y --no-install-recommends libkrb5-3 && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends libkrb5-3 libgssapi-krb5-2 && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
+
+# Create data protection keys directory with correct permissions
+RUN mkdir -p /app/keys && chown app:app /app/keys
 
 # Run as built-in non-root user
 USER app

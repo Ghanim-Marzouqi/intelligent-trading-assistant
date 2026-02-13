@@ -11,6 +11,7 @@ public class OpenCodeZenService : IAiAnalysisService
     private readonly IConfiguration _config;
     private readonly AppDbContext _db;
     private readonly ILogger<OpenCodeZenService> _logger;
+    private readonly bool _isConfigured;
 
     public OpenCodeZenService(
         HttpClient httpClient,
@@ -23,8 +24,28 @@ public class OpenCodeZenService : IAiAnalysisService
         _db = db;
         _logger = logger;
 
-        _httpClient.BaseAddress = new Uri(_config["AiProvider:BaseUrl"] ?? "https://api.opencode.ai/v1");
-        _httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {_config["AiProvider:ApiKey"]}");
+        var apiKey = _config["AiProvider:ApiKey"];
+        _isConfigured = !string.IsNullOrWhiteSpace(apiKey);
+
+        var baseUrl = _config["AiProvider:BaseUrl"] ?? "https://api.opencode.ai/v1";
+        if (!baseUrl.EndsWith('/')) baseUrl += "/";
+        _httpClient.BaseAddress = new Uri(baseUrl);
+
+        if (_isConfigured)
+        {
+            _httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {apiKey}");
+        }
+        else
+        {
+            _logger.LogWarning("AiProvider:ApiKey is not configured. AI analysis features will be unavailable.");
+        }
+    }
+
+    private void EnsureConfigured()
+    {
+        if (!_isConfigured)
+            throw new InvalidOperationException(
+                "AI provider is not configured. Set the AiProvider:ApiKey configuration value.");
     }
 
     public async Task<MarketAnalysis> AnalyzeMarketAsync(string symbol, string timeframe = "H4")
@@ -204,6 +225,8 @@ public class OpenCodeZenService : IAiAnalysisService
 
     private async Task<string> CallApiAsync(string prompt)
     {
+        EnsureConfigured();
+
         var model = _config["AiProvider:Model"] ?? "opencode/glm-4.7";
         var maxTokens = _config.GetValue<int>("AiProvider:MaxTokens", 4096);
         var temperature = _config.GetValue<decimal>("AiProvider:Temperature", 0.3m);
@@ -221,11 +244,29 @@ public class OpenCodeZenService : IAiAnalysisService
         };
 
         var response = await _httpClient.PostAsJsonAsync("chat/completions", request);
-        response.EnsureSuccessStatusCode();
 
-        var result = await response.Content.ReadFromJsonAsync<OpenAiResponse>();
+        if (!response.IsSuccessStatusCode)
+        {
+            var errorBody = await response.Content.ReadAsStringAsync();
+            _logger.LogError("AI API returned {StatusCode}: {Body}", response.StatusCode, errorBody);
+            throw new HttpRequestException(
+                $"AI API returned {(int)response.StatusCode}: {errorBody}");
+        }
 
-        return result?.Choices?.FirstOrDefault()?.Message?.Content ?? string.Empty;
+        var responseBody = await response.Content.ReadAsStringAsync();
+
+        try
+        {
+            var result = JsonSerializer.Deserialize<OpenAiResponse>(responseBody,
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            return result?.Choices?.FirstOrDefault()?.Message?.Content ?? responseBody;
+        }
+        catch (JsonException)
+        {
+            // API returned plain text instead of OpenAI-compatible JSON
+            _logger.LogDebug("AI response is not OpenAI-compatible JSON, returning raw text");
+            return responseBody;
+        }
     }
 }
 

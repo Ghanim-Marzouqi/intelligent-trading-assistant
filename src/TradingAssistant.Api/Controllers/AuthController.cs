@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using System.Text;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.IdentityModel.Tokens;
 using TradingAssistant.Api.Services.CTrader;
 using Microsoft.Extensions.Hosting;
@@ -33,6 +34,7 @@ public class AuthController : ControllerBase
     }
 
     [HttpPost("login")]
+    [EnableRateLimiting("auth")]
     public IActionResult Login([FromBody] LoginRequest request)
     {
         var configuredPassword = _config["Auth:Password"] ?? "";

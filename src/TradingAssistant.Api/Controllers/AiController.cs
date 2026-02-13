@@ -35,6 +35,10 @@ public class AiController : ControllerBase
             var analysis = await _aiService.AnalyzeMarketAsync(symbol.ToUpperInvariant(), timeframe);
             return Ok(analysis);
         }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("not configured"))
+        {
+            return StatusCode(503, new { error = ex.Message });
+        }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error analyzing market for {Symbol}", symbol);
@@ -49,6 +53,10 @@ public class AiController : ControllerBase
         {
             var review = await _aiService.ReviewTradeAsync(tradeId);
             return Ok(review);
+        }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("not configured"))
+        {
+            return StatusCode(503, new { error = ex.Message });
         }
         catch (InvalidOperationException ex)
         {
@@ -67,8 +75,15 @@ public class AiController : ControllerBase
         if (request.Watchlist is null || request.Watchlist.Count == 0)
             return BadRequest(new { error = "Watchlist is required" });
 
-        var briefing = await _aiService.GenerateDailyBriefingAsync(request.Watchlist);
-        return Ok(new BriefingResponse(briefing));
+        try
+        {
+            var briefing = await _aiService.GenerateDailyBriefingAsync(request.Watchlist);
+            return Ok(new BriefingResponse(briefing));
+        }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("not configured"))
+        {
+            return StatusCode(503, new { error = ex.Message });
+        }
     }
 
     [HttpGet("news/{symbol}")]
@@ -81,6 +96,10 @@ public class AiController : ControllerBase
         {
             var sentiment = await _aiService.AnalyzeNewsAsync(symbol.ToUpperInvariant());
             return Ok(sentiment);
+        }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("not configured"))
+        {
+            return StatusCode(503, new { error = ex.Message });
         }
         catch (Exception ex)
         {

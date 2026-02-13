@@ -26,6 +26,12 @@ services:
       - WhatsApp__PhoneNumberId=${WHATSAPP_PHONE_NUMBER_ID}
       - WhatsApp__AccessToken=${WHATSAPP_ACCESS_TOKEN}
       - AiProvider__ApiKey=${OPENCODE_ZEN_API_KEY}
+      - Jwt__Secret=${JWT_SECRET}
+      - Auth__Password=${AUTH_PASSWORD}
+      - Cors__AllowedOrigins=https://trading.yourdomain.com
+      - DataProtection__KeysPath=/app/keys
+    volumes:
+      - dpkeys:/app/keys
     depends_on:
       postgres:
         condition: service_healthy
@@ -105,6 +111,7 @@ services:
 volumes:
   pgdata:
   redisdata:
+  dpkeys:
   traefik-certs:
   prometheusdata:
   grafanadata:

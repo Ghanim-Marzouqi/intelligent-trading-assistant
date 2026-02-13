@@ -141,6 +141,16 @@ public class CTraderApiAdapter : BackgroundService
         }
 
         account.Balance = CTraderConversions.MoneyToDecimal(trader.Balance, moneyDigits);
+
+        // Compute equity from open positions; default to balance when none exist
+        var openPositions = await db.Positions
+            .Where(p => p.AccountId == account.Id && p.Status == PositionStatus.Open)
+            .ToListAsync(ct);
+        var unrealizedPnL = openPositions.Sum(p => p.UnrealizedPnL);
+        account.UnrealizedPnL = unrealizedPnL;
+        account.Equity = account.Balance + unrealizedPnL;
+        account.FreeMargin = account.Equity - openPositions.Sum(p => p.Volume * 1000m);
+
         account.Currency = trader.HasDepositAssetId
             ? _symbolResolver.GetAssetName(trader.DepositAssetId)
             : "USD";
