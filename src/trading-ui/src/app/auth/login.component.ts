@@ -130,6 +130,13 @@ import { AuthService } from './auth.service';
         cursor: not-allowed;
       }
     }
+
+    @media (max-width: 480px) {
+      .login-card {
+        padding: 24px 20px;
+        margin: 0 12px;
+      }
+    }
   `]
 })
 export class LoginComponent {

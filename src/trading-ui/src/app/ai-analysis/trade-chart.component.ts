@@ -38,6 +38,18 @@ export interface TradeLevels {
       overflow: hidden;
       border: 1px solid var(--border);
     }
+
+    @media (max-width: 768px) {
+      .chart-container {
+        height: 300px;
+      }
+    }
+
+    @media (max-width: 480px) {
+      .chart-container {
+        height: 250px;
+      }
+    }
   `]
 })
 export class TradeChartComponent implements AfterViewInit, OnDestroy, OnChanges {
@@ -69,7 +81,7 @@ export class TradeChartComponent implements AfterViewInit, OnDestroy, OnChanges 
 
     this.chart = createChart(container, {
       width: container.clientWidth,
-      height: 400,
+      height: container.clientHeight,
       layout: {
         background: { color: '#141b2d' },
         textColor: '#8b9dc3',
@@ -109,9 +121,9 @@ export class TradeChartComponent implements AfterViewInit, OnDestroy, OnChanges 
 
     this.resizeObserver = new ResizeObserver(entries => {
       for (const entry of entries) {
-        const { width } = entry.contentRect;
+        const { width, height } = entry.contentRect;
         if (this.chart) {
-          this.chart.applyOptions({ width });
+          this.chart.applyOptions({ width, height });
         }
       }
     });

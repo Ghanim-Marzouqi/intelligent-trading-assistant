@@ -59,28 +59,30 @@ import { environment } from '../../environments/environment';
         <div class="card">
           <h3>Performance by Pair</h3>
           @if (overview.pairPerformance?.length) {
-            <table>
-              <thead>
-                <tr>
-                  <th>Pair</th>
-                  <th>Trades</th>
-                  <th>Win Rate</th>
-                  <th>P&L</th>
-                </tr>
-              </thead>
-              <tbody>
-                @for (pair of overview.pairPerformance; track pair.symbol) {
+            <div class="table-scroll table-scroll--no-cards">
+              <table>
+                <thead>
                   <tr>
-                    <td><strong>{{ pair.symbol }}</strong></td>
-                    <td>{{ pair.trades }}</td>
-                    <td>{{ pair.winRate | number:'1.0-0' }}%</td>
-                    <td [class.positive]="pair.totalPnL > 0" [class.negative]="pair.totalPnL < 0">
-                      {{ pair.totalPnL | currency }}
-                    </td>
+                    <th>Pair</th>
+                    <th>Trades</th>
+                    <th>Win Rate</th>
+                    <th>P&L</th>
                   </tr>
-                }
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  @for (pair of overview.pairPerformance; track pair.symbol) {
+                    <tr>
+                      <td><strong>{{ pair.symbol }}</strong></td>
+                      <td>{{ pair.trades }}</td>
+                      <td>{{ pair.winRate | number:'1.0-0' }}%</td>
+                      <td [class.positive]="pair.totalPnL > 0" [class.negative]="pair.totalPnL < 0">
+                        {{ pair.totalPnL | currency }}
+                      </td>
+                    </tr>
+                  }
+                </tbody>
+              </table>
+            </div>
           } @else {
             <p class="empty-state">No data available</p>
           }
@@ -155,6 +157,32 @@ import { environment } from '../../environments/environment';
       text-align: center;
       color: var(--text-muted);
       padding: 40px;
+    }
+
+    @media (max-width: 1024px) {
+      .stats-grid {
+        grid-template-columns: repeat(3, 1fr);
+      }
+    }
+
+    @media (max-width: 768px) {
+      .stats-grid {
+        grid-template-columns: repeat(2, 1fr);
+      }
+
+      .grid-2 {
+        grid-template-columns: 1fr;
+      }
+
+      .stat-value {
+        font-size: 18px;
+      }
+    }
+
+    @media (max-width: 480px) {
+      .stat-value {
+        font-size: 16px;
+      }
     }
   `]
 })

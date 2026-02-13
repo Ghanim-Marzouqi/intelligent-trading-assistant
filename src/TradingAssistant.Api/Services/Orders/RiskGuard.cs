@@ -24,12 +24,23 @@ public class RiskGuard : IRiskGuard
 
     public async Task<RiskValidation> ValidateAsync(string symbol, decimal volume, string direction)
     {
+        var settings = await _db.AnalysisSettings.FirstOrDefaultAsync();
+
         var openPositions = await _db.Positions
             .Where(p => p.Status == PositionStatus.Open)
             .ToListAsync();
 
+        // Check 0: Maximum total open positions
+        var maxOpenPositions = settings?.MaxOpenPositions
+            ?? _config.GetValue<int>("Risk:MaxOpenPositions", 3);
+        if (openPositions.Count >= maxOpenPositions)
+        {
+            return RiskValidation.Invalid($"Max open positions reached: {openPositions.Count}/{maxOpenPositions}");
+        }
+
         // Check 1: Maximum total position size
-        var maxTotalVolume = _config.GetValue<decimal>("Risk:MaxTotalVolume", 10m);
+        var maxTotalVolume = settings?.MaxTotalVolume
+            ?? _config.GetValue<decimal>("Risk:MaxTotalVolume", 10m);
         var currentTotalVolume = openPositions.Sum(p => p.Volume);
         if (currentTotalVolume + volume > maxTotalVolume)
         {
@@ -37,7 +48,8 @@ public class RiskGuard : IRiskGuard
         }
 
         // Check 2: Maximum positions per symbol
-        var maxPositionsPerSymbol = _config.GetValue<int>("Risk:MaxPositionsPerSymbol", 3);
+        var maxPositionsPerSymbol = settings?.MaxPositionsPerSymbol
+            ?? _config.GetValue<int>("Risk:MaxPositionsPerSymbol", 3);
         var symbolPositions = openPositions.Count(p => p.Symbol == symbol);
         if (symbolPositions >= maxPositionsPerSymbol)
         {
@@ -45,7 +57,8 @@ public class RiskGuard : IRiskGuard
         }
 
         // Check 3: Daily loss limit
-        var maxDailyLoss = _config.GetValue<decimal>("Risk:MaxDailyLossPercent", 5m);
+        var maxDailyLoss = settings?.MaxDailyLossPercent
+            ?? _config.GetValue<decimal>("Risk:MaxDailyLossPercent", 5m);
         var todayPnL = await GetTodayPnLAsync();
         var account = await _db.Accounts.FirstOrDefaultAsync(a => a.IsActive);
         if (account is not null)
@@ -69,7 +82,8 @@ public class RiskGuard : IRiskGuard
             return RiskValidation.Invalid($"Correlated exposure too high: {correlatedVolume + volume} > {maxCorrelatedVolume}");
         }
 
-        _logger.LogDebug("Risk validation passed for {Symbol} {Volume} lots", symbol, volume);
+        _logger.LogDebug("Risk validation passed for {Symbol} {Volume} lots (limits from {Source})",
+            symbol, volume, settings is not null ? "DB" : "config");
 
         return RiskValidation.Valid();
     }

@@ -45,30 +45,32 @@ import { SignalRService } from '../shared/services/signalr.service';
             @if (positions.length === 0) {
               <p class="empty-state">No open positions</p>
             } @else {
-              <table>
-                <thead>
-                  <tr>
-                    <th>Symbol</th>
-                    <th>Direction</th>
-                    <th>Volume</th>
-                    <th>Notional</th>
-                    <th>P&L</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  @for (pos of positions; track pos.positionId) {
+              <div class="table-scroll">
+                <table>
+                  <thead>
                     <tr>
-                      <td>{{ pos.symbol }}</td>
-                      <td>{{ pos.direction }}</td>
-                      <td>{{ pos.volume }}</td>
-                      <td>{{ pos.notionalUsd | currency }}</td>
-                      <td [class.positive]="pos.pnL > 0" [class.negative]="pos.pnL < 0">
-                        {{ pos.pnL | currency }}
-                      </td>
+                      <th>Symbol</th>
+                      <th>Direction</th>
+                      <th>Volume</th>
+                      <th>Notional</th>
+                      <th>P&L</th>
                     </tr>
-                  }
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    @for (pos of positions; track pos.positionId) {
+                      <tr>
+                        <td data-label="Symbol">{{ pos.symbol }}</td>
+                        <td data-label="Direction">{{ pos.direction }}</td>
+                        <td data-label="Volume">{{ pos.volume }}</td>
+                        <td data-label="Notional">{{ pos.notionalUsd | currency }}</td>
+                        <td data-label="P&L" [class.positive]="pos.pnL > 0" [class.negative]="pos.pnL < 0">
+                          {{ pos.pnL | currency }}
+                        </td>
+                      </tr>
+                    }
+                  </tbody>
+                </table>
+              </div>
             }
           </div>
         </div>
@@ -308,6 +310,40 @@ import { SignalRService } from '../shared/services/signalr.service';
     button.small {
       padding: 4px 10px;
       font-size: 12px;
+    }
+
+    @media (max-width: 768px) {
+      .stats-grid {
+        grid-template-columns: repeat(2, 1fr);
+      }
+
+      .grid-2 {
+        grid-template-columns: 1fr;
+      }
+
+      .stat-value {
+        font-size: 20px;
+      }
+
+      .pending-item {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 8px;
+      }
+
+      .pending-actions {
+        width: 100%;
+      }
+
+      .pending-actions button {
+        flex: 1;
+      }
+    }
+
+    @media (max-width: 480px) {
+      .stat-value {
+        font-size: 18px;
+      }
     }
   `]
 })

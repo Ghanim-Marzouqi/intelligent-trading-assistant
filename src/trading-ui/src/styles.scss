@@ -150,3 +150,120 @@ table {
   border-radius: 3px;
   &:hover { background: var(--text-muted); }
 }
+
+// Responsive utilities
+.table-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+@media (max-width: 768px) {
+  button, select {
+    min-height: 44px;
+  }
+
+  input, select, textarea {
+    font-size: 16px !important; // Prevents iOS auto-zoom on focus
+  }
+
+  table {
+    th, td {
+      padding: 8px 10px;
+      font-size: 13px;
+    }
+  }
+
+  .card {
+    padding: 16px;
+  }
+
+  button.small {
+    min-height: 36px;
+    padding: 6px 12px;
+  }
+
+  // Mobile card-view for tables with 5+ columns
+  .table-scroll:not(.table-scroll--no-cards) {
+    overflow-x: visible;
+
+    thead {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      border: 0;
+    }
+
+    tbody tr {
+      display: block;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 12px;
+      margin-bottom: 12px;
+      background: var(--surface);
+
+      &:hover {
+        background: var(--surface-elevated);
+      }
+    }
+
+    td {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 6px 0;
+      border-bottom: 1px solid var(--border);
+      font-size: 13px;
+
+      &::before {
+        content: attr(data-label);
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--text-muted);
+        flex-shrink: 0;
+        margin-right: 12px;
+      }
+
+      &:last-child {
+        border-bottom: none;
+      }
+
+      &[data-label="Actions"] {
+        &::before {
+          display: none;
+        }
+        flex-direction: column;
+        align-items: stretch;
+        padding-top: 8px;
+      }
+    }
+
+    .card-actions {
+      display: flex;
+      gap: 8px;
+      width: 100%;
+
+      button {
+        flex: 1;
+      }
+    }
+  }
+}
+
+@media (max-width: 480px) {
+  table {
+    th, td {
+      padding: 6px 8px;
+      font-size: 12px;
+    }
+  }
+
+  .card {
+    padding: 12px;
+  }
+}

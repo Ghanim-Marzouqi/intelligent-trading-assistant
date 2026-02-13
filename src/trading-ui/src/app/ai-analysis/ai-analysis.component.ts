@@ -1541,6 +1541,99 @@ interface TradeReview {
       color: var(--text-muted);
       font-size: 13px;
     }
+
+    @media (max-width: 768px) {
+      .form-row {
+        flex-direction: column;
+      }
+
+      .select-tf {
+        width: 100%;
+      }
+
+      .btn-analyze {
+        width: 100%;
+        justify-content: center;
+      }
+
+      .levels-row {
+        grid-template-columns: 1fr;
+      }
+
+      .trade-levels-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .trade-meta-row {
+        grid-template-columns: repeat(2, 1fr);
+      }
+
+      .review-columns {
+        grid-template-columns: 1fr;
+      }
+
+      .trade-form-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .result-header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 12px;
+      }
+
+      .session-bar {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 6px;
+      }
+
+      .margin-info-row {
+        flex-direction: column;
+        gap: 10px;
+      }
+
+      .trade-form-actions {
+        flex-direction: column;
+      }
+
+      .btn-place-order, .btn-cancel {
+        width: 100%;
+        justify-content: center;
+      }
+    }
+
+    @media (max-width: 480px) {
+      .symbol-dropdown {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        top: auto;
+        max-height: 60vh;
+        margin-top: 0;
+        border-radius: 12px 12px 0 0;
+        z-index: 200;
+      }
+
+      .symbol-list {
+        max-height: 50vh;
+      }
+
+      .trade-meta-row {
+        grid-template-columns: repeat(2, 1fr);
+        gap: 8px;
+      }
+
+      .pair {
+        font-size: 16px;
+      }
+
+      .badge {
+        padding: 4px 8px;
+        font-size: 11px;
+      }
+    }
   `]
 })
 export class AiAnalysisComponent implements OnInit {

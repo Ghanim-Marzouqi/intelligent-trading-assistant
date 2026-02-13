@@ -40,49 +40,51 @@ import { environment } from '../../environments/environment';
         @if (trades.length === 0) {
           <p class="empty-state">No trades recorded yet</p>
         } @else {
-          <table>
-            <thead>
-              <tr>
-                <th>Date</th>
-                <th>Symbol</th>
-                <th>Direction</th>
-                <th>Volume</th>
-                <th>Entry</th>
-                <th>Exit</th>
-                <th>Pips</th>
-                <th>R:R</th>
-                <th>P&L</th>
-                <th>Tags</th>
-              </tr>
-            </thead>
-            <tbody>
-              @for (trade of trades; track trade.id) {
-                <tr (click)="selectTrade(trade)" class="clickable"
-                    [class.selected-row]="selectedTrade?.id === trade.id">
-                  <td>{{ trade.closeTime | date:'shortDate' }}</td>
-                  <td><strong>{{ trade.symbol }}</strong></td>
-                  <td [class.buy]="trade.direction === 'Buy'" [class.sell]="trade.direction === 'Sell'">
-                    {{ trade.direction }}
-                  </td>
-                  <td>{{ trade.volume }}</td>
-                  <td>{{ trade.entryPrice }}</td>
-                  <td>{{ trade.exitPrice }}</td>
-                  <td [class.positive]="trade.pnLPips > 0" [class.negative]="trade.pnLPips < 0">
-                    {{ trade.pnLPips | number:'1.1-1' }}
-                  </td>
-                  <td>{{ trade.riskRewardRatio ? (trade.riskRewardRatio | number:'1.2-2') : '-' }}</td>
-                  <td [class.positive]="trade.netPnL > 0" [class.negative]="trade.netPnL < 0">
-                    {{ trade.netPnL | currency }}
-                  </td>
-                  <td>
-                    @for (tag of trade.tags; track tag.id) {
-                      <span class="tag">{{ tag.name }}</span>
-                    }
-                  </td>
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Symbol</th>
+                  <th>Direction</th>
+                  <th>Volume</th>
+                  <th>Entry</th>
+                  <th>Exit</th>
+                  <th>Pips</th>
+                  <th>R:R</th>
+                  <th>P&L</th>
+                  <th>Tags</th>
                 </tr>
-              }
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                @for (trade of trades; track trade.id) {
+                  <tr (click)="selectTrade(trade)" class="clickable"
+                      [class.selected-row]="selectedTrade?.id === trade.id">
+                    <td data-label="Date">{{ trade.closeTime | date:'shortDate' }}</td>
+                    <td data-label="Symbol"><strong>{{ trade.symbol }}</strong></td>
+                    <td data-label="Direction" [class.buy]="trade.direction === 'Buy'" [class.sell]="trade.direction === 'Sell'">
+                      {{ trade.direction }}
+                    </td>
+                    <td data-label="Volume">{{ trade.volume }}</td>
+                    <td data-label="Entry">{{ trade.entryPrice }}</td>
+                    <td data-label="Exit">{{ trade.exitPrice }}</td>
+                    <td data-label="Pips" [class.positive]="trade.pnLPips > 0" [class.negative]="trade.pnLPips < 0">
+                      {{ trade.pnLPips | number:'1.1-1' }}
+                    </td>
+                    <td data-label="R:R">{{ trade.riskRewardRatio ? (trade.riskRewardRatio | number:'1.2-2') : '-' }}</td>
+                    <td data-label="P&L" [class.positive]="trade.netPnL > 0" [class.negative]="trade.netPnL < 0">
+                      {{ trade.netPnL | currency }}
+                    </td>
+                    <td data-label="Tags">
+                      @for (tag of trade.tags; track tag.id) {
+                        <span class="tag">{{ tag.name }}</span>
+                      }
+                    </td>
+                  </tr>
+                }
+              </tbody>
+            </table>
+          </div>
         }
       </div>
 
@@ -552,6 +554,39 @@ import { environment } from '../../environments/environment';
       resize: vertical;
       box-sizing: border-box;
       margin-bottom: 8px;
+    }
+
+    @media (max-width: 768px) {
+      .stats-grid {
+        grid-template-columns: repeat(2, 1fr);
+      }
+
+      .detail-grid {
+        grid-template-columns: repeat(2, 1fr);
+      }
+
+      .review-fields {
+        grid-template-columns: 1fr;
+      }
+
+      .stat-value {
+        font-size: 20px;
+      }
+
+      .selected-row {
+        border-color: var(--primary) !important;
+        box-shadow: 0 0 12px var(--primary-glow);
+      }
+    }
+
+    @media (max-width: 480px) {
+      .stat-value {
+        font-size: 18px;
+      }
+
+      .detail-header h3 {
+        flex-wrap: wrap;
+      }
     }
   `]
 })

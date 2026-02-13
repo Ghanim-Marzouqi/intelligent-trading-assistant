@@ -9,6 +9,7 @@ namespace TradingAssistant.Tests.Orders;
 public class RiskGuardTests
 {
     private static IConfiguration CreateConfig(
+        int maxOpenPositions = 20,
         decimal maxTotalVolume = 10m,
         int maxPerSymbol = 3,
         decimal maxDailyLoss = 5m,
@@ -17,6 +18,7 @@ public class RiskGuardTests
         return new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
+                ["Risk:MaxOpenPositions"] = maxOpenPositions.ToString(),
                 ["Risk:MaxTotalVolume"] = maxTotalVolume.ToString(),
                 ["Risk:MaxPositionsPerSymbol"] = maxPerSymbol.ToString(),
                 ["Risk:MaxDailyLossPercent"] = maxDailyLoss.ToString(),
@@ -34,6 +36,31 @@ public class RiskGuardTests
         var result = await guard.ValidateAsync("EURUSD", 1.0m, "Buy");
 
         Assert.True(result.IsValid);
+    }
+
+    [Fact]
+    public async Task Validate_ExceedsMaxOpenPositions_ReturnsInvalid()
+    {
+        var db = TestDbContextFactory.Create();
+        for (int i = 0; i < 3; i++)
+        {
+            db.Positions.Add(new Position
+            {
+                Symbol = $"SYM{i}",
+                Volume = 0.1m,
+                Status = PositionStatus.Open,
+                Direction = TradeDirection.Buy,
+                AccountId = 1
+            });
+        }
+        await db.SaveChangesAsync();
+
+        var guard = new RiskGuard(db, CreateConfig(maxOpenPositions: 3), NullLogger<RiskGuard>.Instance);
+
+        var result = await guard.ValidateAsync("EURUSD", 0.1m, "Buy");
+
+        Assert.False(result.IsValid);
+        Assert.Contains("Max open positions reached", result.Reason);
     }
 
     [Fact]
