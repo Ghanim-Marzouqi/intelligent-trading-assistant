@@ -28,7 +28,7 @@ services:
       - AiProvider__ApiKey=${OPENCODE_ZEN_API_KEY}
       - Jwt__Secret=${JWT_SECRET}
       - Auth__Password=${AUTH_PASSWORD}
-      - Cors__AllowedOrigins=https://trading.yourdomain.com
+      - Cors__AllowedOrigins=${CORS_ALLOWED_ORIGINS:-https://trading.yourdomain.com}
       - DataProtection__KeysPath=/app/keys
     volumes:
       - dpkeys:/app/keys

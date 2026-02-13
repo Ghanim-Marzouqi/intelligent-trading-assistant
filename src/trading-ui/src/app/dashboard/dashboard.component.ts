@@ -223,6 +223,10 @@ export class DashboardComponent implements OnInit, OnDestroy {
     this.http.get<any>(`${environment.apiUrl}/api/positions/account`).subscribe({
       next: (data) => {
         this.account = data;
+      },
+      error: () => {
+        // Retry after 10s — account may not be synced yet
+        setTimeout(() => this.loadAccount(), 10000);
       }
     });
   }
@@ -239,6 +243,9 @@ export class DashboardComponent implements OnInit, OnDestroy {
           currentPrice: p.currentPrice,
           pnL: p.unrealizedPnL
         }));
+      },
+      error: () => {
+        setTimeout(() => this.loadPositions(), 10000);
       }
     });
   }
