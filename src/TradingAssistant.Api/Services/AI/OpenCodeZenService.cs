@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using TradingAssistant.Api.Data;
 using TradingAssistant.Api.Services.Alerts.Indicators;
 using TradingAssistant.Api.Services.CTrader;
+using TradingAssistant.Api.Services.Orders;
 
 namespace TradingAssistant.Api.Services.AI;
 
@@ -20,6 +21,8 @@ public class OpenCodeZenService : IAiAnalysisService
     private readonly AppDbContext _db;
     private readonly ILogger<OpenCodeZenService> _logger;
     private readonly ICTraderPriceStream _priceStream;
+    private readonly ICTraderHistoricalData _historicalData;
+    private readonly IPositionSizer _positionSizer;
     private readonly bool _isConfigured;
 
     public OpenCodeZenService(
@@ -27,13 +30,17 @@ public class OpenCodeZenService : IAiAnalysisService
         IConfiguration config,
         AppDbContext db,
         ILogger<OpenCodeZenService> logger,
-        ICTraderPriceStream priceStream)
+        ICTraderPriceStream priceStream,
+        ICTraderHistoricalData historicalData,
+        IPositionSizer positionSizer)
     {
         _httpClient = httpClient;
         _config = config;
         _db = db;
         _logger = logger;
         _priceStream = priceStream;
+        _historicalData = historicalData;
+        _positionSizer = positionSizer;
 
         var apiKey = _config["AiProvider:ApiKey"];
         _isConfigured = !string.IsNullOrWhiteSpace(apiKey);
@@ -71,6 +78,20 @@ public class OpenCodeZenService : IAiAnalysisService
             Based on the market data above, analyze the current conditions for {{symbol}} on the {{timeframe}} timeframe.
             Reference the actual price levels and indicator values provided. Do NOT fabricate or guess prices.
 
+            DECISION GUIDELINES — use these to determine your recommendation:
+            - "buy": RSI < 30 (oversold), price near/below Bollinger Lower, or MACD histogram turning positive
+            - "sell": RSI > 70 (overbought), price near/above Bollinger Upper, or MACD histogram turning negative
+            - "reduce_exposure": multiple conflicting signals with high volatility (wide Bollinger bands, extreme RSI)
+            - "wait": ONLY when indicators are genuinely mixed/neutral (RSI 40-60, price near Bollinger Middle, flat MACD)
+
+            Be decisive. If the data shows a clear directional signal, recommend "buy" or "sell" with appropriate confidence.
+            Do NOT default to "wait" unless the indicators truly show no directional bias.
+
+            TRADE SUGGESTION: If your recommendation is "buy" or "sell", you MUST also provide a "trade" object with concrete price levels.
+            - Place stop_loss beyond the nearest support (for buy) or resistance (for sell) with a small buffer.
+            - Place take_profit targeting at least a 1.5:1 reward-to-risk ratio.
+            - If recommendation is "wait" or "reduce_exposure", set "trade" to null.
+
             Respond ONLY with valid JSON in this exact format (no markdown, no code fences):
             {
                 "pair": "{{symbol}}",
@@ -79,7 +100,15 @@ public class OpenCodeZenService : IAiAnalysisService
                 "key_levels": { "support": 0, "resistance": 0 },
                 "risk_events": ["event1", "event2"],
                 "recommendation": "buy|sell|wait|reduce_exposure",
-                "reasoning": "detailed explanation referencing the real data"
+                "reasoning": "detailed explanation referencing the real data and why this recommendation was chosen",
+                "trade": {
+                    "order_type": "market|limit|stop",
+                    "direction": "buy|sell",
+                    "entry": <price>,
+                    "stop_loss": <price>,
+                    "take_profit": <price>,
+                    "rationale": "brief explanation of why these specific levels were chosen"
+                }
             }
             """;
 
@@ -94,6 +123,13 @@ public class OpenCodeZenService : IAiAnalysisService
                 // Override with computed values — never trust the LLM for numeric fields
                 analysis.KeyLevels.Support = ctx.Support;
                 analysis.KeyLevels.Resistance = ctx.Resistance;
+
+                // Post-process trade suggestion
+                await PostProcessTradeAsync(analysis, symbol);
+
+                // Attach market session info
+                AttachSessionInfo(analysis, symbol);
+
                 return analysis;
             }
 
@@ -108,6 +144,95 @@ public class OpenCodeZenService : IAiAnalysisService
                 KeyLevels = new KeyLevels { Support = ctx.Support, Resistance = ctx.Resistance },
                 Reasoning = response
             };
+        }
+    }
+
+    private async Task PostProcessTradeAsync(MarketAnalysis analysis, string symbol)
+    {
+        if (analysis.Trade is null)
+            return;
+
+        try
+        {
+            var trade = analysis.Trade;
+
+            // Validate SL is on correct side of entry
+            if (trade.Direction.Equals("buy", StringComparison.OrdinalIgnoreCase) && trade.StopLoss >= trade.Entry)
+            {
+                _logger.LogWarning("Invalid trade: buy SL ({SL}) >= entry ({Entry}), clearing trade", trade.StopLoss, trade.Entry);
+                analysis.Trade = null;
+                return;
+            }
+            if (trade.Direction.Equals("sell", StringComparison.OrdinalIgnoreCase) && trade.StopLoss <= trade.Entry)
+            {
+                _logger.LogWarning("Invalid trade: sell SL ({SL}) <= entry ({Entry}), clearing trade", trade.StopLoss, trade.Entry);
+                analysis.Trade = null;
+                return;
+            }
+
+            var slDistance = Math.Abs(trade.Entry - trade.StopLoss);
+            if (slDistance == 0)
+            {
+                analysis.Trade = null;
+                return;
+            }
+
+            var tpDistance = Math.Abs(trade.TakeProfit - trade.Entry);
+            var rr = tpDistance / slDistance;
+
+            // Enforce minimum 1.5:1 R:R
+            if (rr < 1.5m)
+            {
+                var adjustedTpDistance = slDistance * 1.5m;
+                trade.TakeProfit = trade.Direction.Equals("buy", StringComparison.OrdinalIgnoreCase)
+                    ? trade.Entry + adjustedTpDistance
+                    : trade.Entry - adjustedTpDistance;
+                tpDistance = adjustedTpDistance;
+                rr = 1.5m;
+            }
+
+            trade.RiskRewardRatio = Math.Round(rr, 2);
+            trade.RiskPercent = 1.0m;
+
+            // Calculate pip size
+            var pipSize = symbol.Contains("JPY") ? 0.01m
+                : (symbol.Contains("XAU") || symbol.Contains("GOLD")) ? 0.1m
+                : 0.0001m;
+
+            trade.PipsAtRisk = Math.Round(slDistance / pipSize, 1);
+            trade.PipsToTarget = Math.Round(tpDistance / pipSize, 1);
+
+            // Get account balance for risk calculation
+            var account = await _db.Accounts.FirstOrDefaultAsync(a => a.IsActive);
+            if (account is not null)
+            {
+                trade.RiskAmount = Math.Round(account.Balance * 0.01m, 2);
+                trade.PotentialReward = Math.Round(trade.RiskAmount * trade.RiskRewardRatio, 2);
+            }
+
+            // Calculate lot size via position sizer
+            trade.LotSize = await _positionSizer.CalculateAsync(symbol, 1.0m, trade.Entry, trade.StopLoss);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Trade post-processing failed for {Symbol}, clearing trade suggestion", symbol);
+            analysis.Trade = null;
+        }
+    }
+
+    private void AttachSessionInfo(MarketAnalysis analysis, string symbol)
+    {
+        try
+        {
+            var sym = _db.Symbols.FirstOrDefault(s => s.Name == symbol && s.IsActive);
+            var category = sym is not null
+                ? SymbolCategorizer.Categorize(sym.Name, sym.BaseCurrency, sym.QuoteCurrency)
+                : "Other";
+            analysis.MarketSession = MarketSessionService.GetSessionInfo(category);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to attach session info for {Symbol}", symbol);
         }
     }
 
@@ -248,11 +373,7 @@ public class OpenCodeZenService : IAiAnalysisService
 
     private async Task<MarketDataContext> BuildMarketDataContextAsync(string symbol)
     {
-        const int minTicks = 5;
-        const int maxWaitMs = 10_000;
-        const int pollIntervalMs = 250;
-
-        // Fail fast for unknown symbols instead of waiting 10s for nothing
+        // Fail fast for unknown symbols
         if (!_priceStream.IsKnownSymbol(symbol))
         {
             _logger.LogWarning("Symbol {Symbol} is not recognized by the broker", symbol);
@@ -261,30 +382,20 @@ public class OpenCodeZenService : IAiAnalysisService
                 0m, 0m);
         }
 
-        // Auto-subscribe so the price stream has data for this symbol
+        // Ensure we have a live price subscription
         var currentPrice = _priceStream.GetCurrentPrice(symbol);
-        var wasAlreadySubscribed = currentPrice is not null;
-
         if (currentPrice is null)
         {
-            _logger.LogInformation("No price data for {Symbol}, auto-subscribing and waiting for ticks...", symbol);
+            _logger.LogInformation("No price data for {Symbol}, auto-subscribing...", symbol);
             await _priceStream.SubscribeAsync(symbol);
-        }
 
-        // Wait for enough ticks to compute meaningful indicators
-        var elapsed = 0;
-        while (elapsed < maxWaitMs)
-        {
-            currentPrice = _priceStream.GetCurrentPrice(symbol);
-            var tickCount = _priceStream.GetPriceHistory(symbol).Count;
-            if (currentPrice is not null && (tickCount >= minTicks || (wasAlreadySubscribed && tickCount >= 1)))
-                break;
-            await Task.Delay(pollIntervalMs);
-            elapsed += pollIntervalMs;
+            // Wait briefly for at least one tick
+            for (var i = 0; i < 20 && currentPrice is null; i++)
+            {
+                await Task.Delay(250);
+                currentPrice = _priceStream.GetCurrentPrice(symbol);
+            }
         }
-
-        // Final read after wait
-        currentPrice = _priceStream.GetCurrentPrice(symbol);
 
         if (currentPrice is null)
             return new MarketDataContext(
@@ -293,52 +404,107 @@ public class OpenCodeZenService : IAiAnalysisService
 
         var (bid, ask) = currentPrice.Value;
         var spread = ask - bid;
-        var history = _priceStream.GetPriceHistory(symbol);
 
-        _logger.LogInformation("Building market context for {Symbol}: {TickCount} ticks, bid={Bid}, ask={Ask}",
-            symbol, history.Count, bid, ask);
-
-        decimal sessionHigh = bid, sessionLow = bid;
         var sb = new System.Text.StringBuilder();
         sb.AppendLine($"=== LIVE MARKET DATA for {symbol} ===");
         sb.AppendLine($"Current Bid: {bid}");
         sb.AppendLine($"Current Ask: {ask}");
         sb.AppendLine($"Spread: {spread}");
-        sb.AppendLine($"Tick samples: {history.Count}");
 
-        if (history.Count > 0)
+        decimal support = bid, resistance = bid;
+
+        // Try to fetch OHLC candles for proper indicator computation
+        IReadOnlyList<Candle> candles = [];
+        try
         {
-            sessionHigh = history.Max();
-            sessionLow = history.Min();
+            candles = await _historicalData.GetCandlesAsync(symbol, ProtoOATrendbarPeriod.H1, 50);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to fetch OHLC candles for {Symbol}, falling back to tick data", symbol);
+        }
+
+        if (candles.Count > 0)
+        {
+            // Use OHLC candle close prices for indicator computation
+            var closes = candles.Select(c => c.Close).ToList();
+            var sessionHigh = candles.Max(c => c.High);
+            var sessionLow = candles.Min(c => c.Low);
+            support = sessionLow;
+            resistance = sessionHigh;
+
+            sb.AppendLine($"Data source: {candles.Count} H1 candles");
             sb.AppendLine($"Session High: {sessionHigh}");
             sb.AppendLine($"Session Low: {sessionLow}");
+
+            // Show recent OHLC bars
+            sb.AppendLine("Recent candles (newest first):");
+            foreach (var c in candles.TakeLast(5).Reverse())
+                sb.AppendLine($"  {c.Timestamp:yyyy-MM-dd HH:mm} O={c.Open} H={c.High} L={c.Low} C={c.Close} V={c.Volume}");
+
+            if (closes.Count >= 15)
+            {
+                var rsi = new RsiCalculator(14).Calculate(closes);
+                sb.AppendLine($"RSI(14): {rsi:F2}");
+            }
+
+            if (closes.Count >= 26)
+            {
+                var macd = new MacdCalculator(12, 26, 9).Calculate(closes);
+                sb.AppendLine($"MACD Line: {macd.MacdLine:F6}");
+                sb.AppendLine($"MACD Signal: {macd.SignalLine:F6}");
+                sb.AppendLine($"MACD Histogram: {macd.Histogram:F6}");
+            }
+
+            if (closes.Count >= 20)
+            {
+                var bb = new BollingerCalculator(20, 2m).Calculate(closes);
+                sb.AppendLine($"Bollinger Upper: {bb.Upper}");
+                sb.AppendLine($"Bollinger Middle: {bb.Middle}");
+                sb.AppendLine($"Bollinger Lower: {bb.Lower}");
+                support = bb.Lower;
+                resistance = bb.Upper;
+            }
         }
-
-        decimal support = sessionLow;
-        decimal resistance = sessionHigh;
-
-        if (history.Count >= 15) // RSI needs period + 1
+        else
         {
-            var rsi = new RsiCalculator(14).Calculate(history);
-            sb.AppendLine($"RSI(14): {rsi}");
-        }
+            // Fallback to tick data when candles aren't available
+            var history = _priceStream.GetPriceHistory(symbol);
+            sb.AppendLine($"Data source: {history.Count} tick samples (candles unavailable)");
 
-        if (history.Count >= 26) // MACD needs slow period
-        {
-            var macd = new MacdCalculator(12, 26, 9).Calculate(history);
-            sb.AppendLine($"MACD Line: {macd.MacdLine:F6}");
-            sb.AppendLine($"MACD Signal: {macd.SignalLine:F6}");
-            sb.AppendLine($"MACD Histogram: {macd.Histogram:F6}");
-        }
+            if (history.Count > 0)
+            {
+                var sessionHigh = history.Max();
+                var sessionLow = history.Min();
+                support = sessionLow;
+                resistance = sessionHigh;
+                sb.AppendLine($"Session High: {sessionHigh}");
+                sb.AppendLine($"Session Low: {sessionLow}");
+            }
 
-        if (history.Count >= 20) // Bollinger needs period
-        {
-            var bb = new BollingerCalculator(20, 2m).Calculate(history);
-            sb.AppendLine($"Bollinger Upper: {bb.Upper}");
-            sb.AppendLine($"Bollinger Middle: {bb.Middle}");
-            sb.AppendLine($"Bollinger Lower: {bb.Lower}");
-            support = bb.Lower;
-            resistance = bb.Upper;
+            if (history.Count >= 15)
+            {
+                var rsi = new RsiCalculator(14).Calculate(history);
+                sb.AppendLine($"RSI(14): {rsi:F2}");
+            }
+
+            if (history.Count >= 26)
+            {
+                var macd = new MacdCalculator(12, 26, 9).Calculate(history);
+                sb.AppendLine($"MACD Line: {macd.MacdLine:F6}");
+                sb.AppendLine($"MACD Signal: {macd.SignalLine:F6}");
+                sb.AppendLine($"MACD Histogram: {macd.Histogram:F6}");
+            }
+
+            if (history.Count >= 20)
+            {
+                var bb = new BollingerCalculator(20, 2m).Calculate(history);
+                sb.AppendLine($"Bollinger Upper: {bb.Upper}");
+                sb.AppendLine($"Bollinger Middle: {bb.Middle}");
+                sb.AppendLine($"Bollinger Lower: {bb.Lower}");
+                support = bb.Lower;
+                resistance = bb.Upper;
+            }
         }
 
         sb.AppendLine("=== END MARKET DATA ===");

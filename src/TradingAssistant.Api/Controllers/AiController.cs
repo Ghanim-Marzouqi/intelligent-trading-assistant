@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using TradingAssistant.Api.Services.AI;
+using TradingAssistant.Api.Services.CTrader;
 
 namespace TradingAssistant.Api.Controllers;
 
@@ -10,11 +11,16 @@ namespace TradingAssistant.Api.Controllers;
 public class AiController : ControllerBase
 {
     private readonly IAiAnalysisService _aiService;
+    private readonly ICTraderHistoricalData _historicalData;
     private readonly ILogger<AiController> _logger;
 
-    public AiController(IAiAnalysisService aiService, ILogger<AiController> logger)
+    public AiController(
+        IAiAnalysisService aiService,
+        ICTraderHistoricalData historicalData,
+        ILogger<AiController> logger)
     {
         _aiService = aiService;
+        _historicalData = historicalData;
         _logger = logger;
     }
 
@@ -107,7 +113,36 @@ public class AiController : ControllerBase
             return StatusCode(500, new { error = "An error occurred during news analysis." });
         }
     }
+    [HttpGet("candles/{symbol}")]
+    public async Task<ActionResult<IEnumerable<CandleDto>>> GetCandles(
+        string symbol,
+        [FromQuery] string timeframe = "H4",
+        [FromQuery] int count = 100)
+    {
+        if (string.IsNullOrWhiteSpace(symbol) || symbol.Length > 10)
+            return BadRequest("Invalid symbol");
+
+        if (count < 10 || count > 500)
+            return BadRequest("Count must be between 10 and 500");
+
+        var period = TrendbarPeriodMapper.Parse(timeframe);
+
+        try
+        {
+            var candles = await _historicalData.GetCandlesAsync(symbol.ToUpperInvariant(), period, count);
+            var dtos = candles.Select(c => new CandleDto(
+                new DateTimeOffset(c.Timestamp, TimeSpan.Zero).ToUnixTimeSeconds(),
+                c.Open, c.High, c.Low, c.Close, c.Volume));
+            return Ok(dtos);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error fetching candles for {Symbol}", symbol);
+            return StatusCode(500, new { error = "Failed to fetch candle data." });
+        }
+    }
 }
 
+public record CandleDto(long Time, decimal Open, decimal High, decimal Low, decimal Close, long Volume);
 public record BriefingRequest(List<string>? Watchlist);
 public record BriefingResponse(string Briefing);

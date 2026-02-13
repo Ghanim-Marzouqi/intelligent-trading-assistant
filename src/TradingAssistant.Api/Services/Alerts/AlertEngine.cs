@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 using TradingAssistant.Api.Data;
+using TradingAssistant.Api.Hubs;
 using TradingAssistant.Api.Models.Alerts;
 using TradingAssistant.Api.Services.Alerts.Conditions;
 using TradingAssistant.Api.Services.CTrader;
@@ -221,29 +223,39 @@ public class AlertEngine : BackgroundService
             // Send notifications
             await _notificationService.SendAlertAsync(trigger);
 
-            // Fire-and-forget AI enrichment
-            _ = Task.Run(async () =>
+            // Fire-and-forget AI enrichment (only when enabled on the rule)
+            if (rule.AiEnrichEnabled)
             {
-                try
+                _ = Task.Run(async () =>
                 {
-                    using var scope = _serviceProvider.CreateScope();
-                    var aiService = scope.ServiceProvider.GetRequiredService<AI.IAiAnalysisService>();
-                    var enrichDb = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-
-                    var enrichment = await aiService.EnrichAlertAsync(rule.Symbol, triggerPrice, trigger.Message);
-
-                    var savedTrigger = await enrichDb.AlertTriggers.FindAsync(trigger.Id);
-                    if (savedTrigger is not null)
+                    try
                     {
-                        savedTrigger.AiEnrichment = enrichment;
-                        await enrichDb.SaveChangesAsync();
+                        using var enrichScope = _serviceProvider.CreateScope();
+                        var aiService = enrichScope.ServiceProvider.GetRequiredService<AI.IAiAnalysisService>();
+                        var enrichDb = enrichScope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+                        var enrichment = await aiService.EnrichAlertAsync(rule.Symbol, triggerPrice, trigger.Message);
+
+                        var savedTrigger = await enrichDb.AlertTriggers.FindAsync(trigger.Id);
+                        if (savedTrigger is not null)
+                        {
+                            savedTrigger.AiEnrichment = enrichment;
+                            await enrichDb.SaveChangesAsync();
+                        }
+
+                        // Push enriched follow-up to SignalR clients
+                        var hubContext = enrichScope.ServiceProvider
+                            .GetRequiredService<IHubContext<TradingHub, ITradingHubClient>>();
+                        await hubContext.Clients.All.ReceiveAlert(new AlertNotification(
+                            trigger.Id, trigger.Symbol, trigger.Message,
+                            "info", trigger.TriggeredAt, enrichment));
                     }
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "AI enrichment failed for alert {AlertName}", rule.Name);
-                }
-            });
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "AI enrichment failed for alert {AlertName}", rule.Name);
+                    }
+                });
+            }
         }
         catch (Exception ex)
         {

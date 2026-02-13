@@ -18,6 +18,34 @@ public class MarketAnalysis
     public List<string> RiskEvents { get; set; } = [];
     public string Recommendation { get; set; } = string.Empty;
     public string Reasoning { get; set; } = string.Empty;
+    public TradeSuggestion? Trade { get; set; }
+    public MarketSessionInfo? MarketSession { get; set; }
+}
+
+public class TradeSuggestion
+{
+    public string OrderType { get; set; } = "market";
+    public string Direction { get; set; } = string.Empty;
+    public decimal Entry { get; set; }
+    public decimal StopLoss { get; set; }
+    public decimal TakeProfit { get; set; }
+    public decimal LotSize { get; set; }
+    public decimal RiskPercent { get; set; } = 1.0m;
+    public decimal RiskRewardRatio { get; set; }
+    public decimal PipsAtRisk { get; set; }
+    public decimal PipsToTarget { get; set; }
+    public decimal RiskAmount { get; set; }
+    public decimal PotentialReward { get; set; }
+    public string Rationale { get; set; } = string.Empty;
+}
+
+public class MarketSessionInfo
+{
+    public bool IsMarketOpen { get; set; }
+    public List<string> ActiveSessions { get; set; } = [];
+    public string PrimarySession { get; set; } = string.Empty;
+    public string TradingAdvice { get; set; } = string.Empty;
+    public DateTime? NextOpen { get; set; }
 }
 
 public class KeyLevels

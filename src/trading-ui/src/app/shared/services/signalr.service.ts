@@ -17,6 +17,7 @@ export interface AlertNotification {
   message: string;
   severity: string;
   triggeredAt: Date;
+  aiEnrichment?: string;
 }
 
 export interface PositionUpdate {
@@ -129,8 +130,15 @@ export class SignalRService {
     });
 
     this.hubConnection.on('ReceiveAlert', (alert: AlertNotification) => {
-      const alerts = [alert, ...this.alertsSubject.value];
-      this.alertsSubject.next(alerts.slice(0, 50));
+      const alerts = this.alertsSubject.value;
+      // If this is an AI enrichment follow-up, update the existing alert
+      const existing = alerts.findIndex(a => a.alertId === alert.alertId);
+      if (existing >= 0 && alert.aiEnrichment) {
+        alerts[existing] = { ...alerts[existing], aiEnrichment: alert.aiEnrichment };
+        this.alertsSubject.next([...alerts]);
+      } else if (existing < 0) {
+        this.alertsSubject.next([alert, ...alerts].slice(0, 50));
+      }
     });
 
     this.hubConnection.on('ReceivePositionUpdate', (position: PositionUpdate) => {

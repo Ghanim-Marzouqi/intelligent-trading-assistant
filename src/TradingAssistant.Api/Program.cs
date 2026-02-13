@@ -166,6 +166,7 @@ builder.Services.AddHostedService<CTraderApiAdapter>();
 builder.Services.AddSingleton<ICTraderPriceStream, CTraderPriceStream>();
 builder.Services.AddSingleton<ICTraderAccountStream, CTraderAccountStream>();
 builder.Services.AddScoped<ICTraderOrderExecutor, CTraderOrderExecutor>();
+builder.Services.AddSingleton<ICTraderHistoricalData, CTraderHistoricalData>();
 
 // Alert Services
 builder.Services.AddSingleton<AlertEngine>();

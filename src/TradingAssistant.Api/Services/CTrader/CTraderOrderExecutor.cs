@@ -1,4 +1,5 @@
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using Microsoft.EntityFrameworkCore;
 using OpenAPI.Net;
 using TradingAssistant.Api.Data;
@@ -108,12 +109,16 @@ public class CTraderOrderExecutor : ICTraderOrderExecutor
             if (takeProfit.HasValue)
                 req.TakeProfit = (double)takeProfit.Value;
 
-            await client.SendMessage(req, ProtoOAPayloadType.ProtoOaAmendPositionSltpReq);
-
-            var response = await client.OfType<ProtoOAExecutionEvent>()
+            // Subscribe BEFORE sending to avoid race condition
+            var responseTask = client.OfType<ProtoOAExecutionEvent>()
                 .Where(e => e.Position != null && e.Position.PositionId == ctraderPositionId)
                 .Timeout(ResponseTimeout)
-                .FirstAsync();
+                .FirstAsync()
+                .ToTask();
+
+            await client.SendMessage(req, ProtoOAPayloadType.ProtoOaAmendPositionSltpReq);
+
+            await responseTask;
 
             return new OrderResult
             {
@@ -153,23 +158,27 @@ public class CTraderOrderExecutor : ICTraderOrderExecutor
             using var scope = _scopeFactory.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
-            var position = await db.Positions.FirstOrDefaultAsync(p => p.Id == positionId);
+            var position = await db.Positions.FirstOrDefaultAsync(p => p.CTraderPositionId == positionId);
             if (position is null)
                 return new OrderResult { Success = false, ErrorMessage = "Position not found" };
 
             var req = new ProtoOAClosePositionReq
             {
                 CtidTraderAccountId = accountId,
-                PositionId = position.CTraderPositionId,
+                PositionId = positionId,
                 Volume = CTraderConversions.LotsToCents(position.Volume)
             };
 
+            // Subscribe BEFORE sending to avoid race condition
+            var responseTask = client.OfType<ProtoOAExecutionEvent>()
+                .Where(e => e.Position != null && e.Position.PositionId == positionId)
+                .Timeout(ResponseTimeout)
+                .FirstAsync()
+                .ToTask();
+
             await client.SendMessage(req, ProtoOAPayloadType.ProtoOaClosePositionReq);
 
-            var response = await client.OfType<ProtoOAExecutionEvent>()
-                .Where(e => e.Position != null && e.Position.PositionId == position.CTraderPositionId)
-                .Timeout(ResponseTimeout)
-                .FirstAsync();
+            await responseTask;
 
             return new OrderResult
             {
@@ -218,12 +227,16 @@ public class CTraderOrderExecutor : ICTraderOrderExecutor
                 OrderId = order.CTraderOrderId
             };
 
-            await client.SendMessage(req, ProtoOAPayloadType.ProtoOaCancelOrderReq);
-
-            var response = await client.OfType<ProtoOAExecutionEvent>()
+            // Subscribe BEFORE sending to avoid race condition
+            var responseTask = client.OfType<ProtoOAExecutionEvent>()
                 .Where(e => e.Order != null && e.Order.OrderId == order.CTraderOrderId)
                 .Timeout(ResponseTimeout)
-                .FirstAsync();
+                .FirstAsync()
+                .ToTask();
+
+            await client.SendMessage(req, ProtoOAPayloadType.ProtoOaCancelOrderReq);
+
+            await responseTask;
 
             return new OrderResult
             {
@@ -277,18 +290,67 @@ public class CTraderOrderExecutor : ICTraderOrderExecutor
                 req.LimitPrice = (double)limitPrice.Value;
             if (stopPrice.HasValue)
                 req.StopPrice = (double)stopPrice.Value;
-            if (stopLoss.HasValue)
-                req.StopLoss = (double)stopLoss.Value;
-            if (takeProfit.HasValue)
-                req.TakeProfit = (double)takeProfit.Value;
+
+            // For non-market orders, SL/TP can be absolute prices.
+            // For market orders, SL/TP will be set after fill via position modification.
+            if (orderType != ProtoOAOrderType.Market)
+            {
+                if (stopLoss.HasValue)
+                    req.StopLoss = (double)stopLoss.Value;
+                if (takeProfit.HasValue)
+                    req.TakeProfit = (double)takeProfit.Value;
+            }
+
+            // Subscribe to both execution events AND order errors BEFORE sending
+            // to avoid race conditions and catch rejections.
+            // For market orders, wait for OrderFilled (not just OrderAccepted)
+            // so the position is ready for SL/TP modification.
+            var executionTask = client.OfType<ProtoOAExecutionEvent>()
+                .Where(e => e.Order != null && e.Order.TradeData.SymbolId == symbolId
+                    && (orderType != ProtoOAOrderType.Market
+                        || e.ExecutionType == ProtoOAExecutionType.OrderFilled
+                        || e.ExecutionType == ProtoOAExecutionType.OrderPartialFill
+                        || e.ExecutionType == ProtoOAExecutionType.OrderRejected))
+                .Select(e => (object)e)
+                .FirstAsync()
+                .ToTask();
+
+            var errorTask = client.OfType<ProtoOAOrderErrorEvent>()
+                .Select(e => (object)e)
+                .FirstAsync()
+                .ToTask();
+
+            _logger.LogDebug("Sending {OrderType} order for {Symbol} (ID={SymbolId}), volume={Volume} cents",
+                orderType, symbol, symbolId, CTraderConversions.LotsToCents(volume));
 
             await client.SendMessage(req, ProtoOAPayloadType.ProtoOaNewOrderReq);
 
-            // Wait for execution event
-            var response = await client.OfType<ProtoOAExecutionEvent>()
-                .Where(e => e.Order != null && e.Order.TradeData.SymbolId == symbolId)
-                .Timeout(ResponseTimeout)
-                .FirstAsync();
+            // Wait for whichever comes first: execution event or error, with timeout
+            var completedTask = await Task.WhenAny(executionTask, errorTask, Task.Delay(ResponseTimeout));
+
+            if (completedTask == errorTask)
+            {
+                var orderError = (ProtoOAOrderErrorEvent)await errorTask;
+                _logger.LogWarning("Order rejected: {ErrorCode} - {Description}",
+                    orderError.ErrorCode, orderError.Description);
+                return new OrderResult
+                {
+                    Success = false,
+                    ErrorMessage = $"{orderError.ErrorCode}: {orderError.Description}",
+                    ErrorCode = orderError.ErrorCode
+                };
+            }
+
+            if (completedTask != executionTask)
+            {
+                return new OrderResult
+                {
+                    Success = false,
+                    ErrorMessage = "Timeout waiting for order execution response"
+                };
+            }
+
+            var response = (ProtoOAExecutionEvent)await executionTask;
 
             if (response.HasErrorCode)
             {
@@ -300,12 +362,92 @@ public class CTraderOrderExecutor : ICTraderOrderExecutor
                 };
             }
 
-            return new OrderResult
+            var result = new OrderResult
             {
                 Success = true,
                 OrderId = response.Order?.OrderId,
                 PositionId = response.Position?.PositionId
             };
+
+            // For market orders, set SL/TP via position modification after fill
+            if (orderType == ProtoOAOrderType.Market && response.Position != null
+                && (stopLoss.HasValue || takeProfit.HasValue))
+            {
+                try
+                {
+                    var slTpReq = new ProtoOAAmendPositionSLTPReq
+                    {
+                        CtidTraderAccountId = accountId,
+                        PositionId = response.Position.PositionId
+                    };
+                    if (stopLoss.HasValue)
+                        slTpReq.StopLoss = (double)stopLoss.Value;
+                    if (takeProfit.HasValue)
+                        slTpReq.TakeProfit = (double)takeProfit.Value;
+
+                    var slTpResponseTask = client.OfType<ProtoOAExecutionEvent>()
+                        .Where(e => e.Position != null
+                            && e.Position.PositionId == response.Position.PositionId)
+                        .Timeout(ResponseTimeout)
+                        .FirstAsync()
+                        .ToTask();
+
+                    var slTpErrorTask = client.OfType<ProtoOAOrderErrorEvent>()
+                        .Timeout(ResponseTimeout)
+                        .FirstAsync()
+                        .ToTask();
+
+                    await client.SendMessage(slTpReq, ProtoOAPayloadType.ProtoOaAmendPositionSltpReq);
+
+                    var slTpCompleted = await Task.WhenAny(slTpResponseTask, slTpErrorTask);
+                    if (slTpCompleted == slTpErrorTask)
+                    {
+                        var slTpError = await slTpErrorTask;
+                        _logger.LogWarning("Failed to set SL/TP: {ErrorCode} - {Description}",
+                            slTpError.ErrorCode, slTpError.Description);
+                        throw new InvalidOperationException($"{slTpError.ErrorCode}: {slTpError.Description}");
+                    }
+                    await slTpResponseTask;
+
+                    _logger.LogInformation("Set SL/TP on position {PositionId}: SL={StopLoss}, TP={TakeProfit}",
+                        response.Position.PositionId, stopLoss, takeProfit);
+
+                    // Update DB immediately so the position shows SL/TP without waiting for reconciliation
+                    try
+                    {
+                        using var scope = _scopeFactory.CreateScope();
+                        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+                        var dbPosition = await db.Positions
+                            .FirstOrDefaultAsync(p => p.CTraderPositionId == response.Position.PositionId);
+                        if (dbPosition != null)
+                        {
+                            if (stopLoss.HasValue) dbPosition.StopLoss = stopLoss;
+                            if (takeProfit.HasValue) dbPosition.TakeProfit = takeProfit;
+                            dbPosition.UpdatedAt = DateTime.UtcNow;
+                            await db.SaveChangesAsync();
+                        }
+                    }
+                    catch (Exception dbEx)
+                    {
+                        _logger.LogWarning(dbEx, "Failed to update SL/TP in database (will sync on next reconciliation)");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Order filled but failed to set SL/TP on position {PositionId}",
+                        response.Position.PositionId);
+                    // Order still succeeded, just SL/TP failed — report partial success
+                    return new OrderResult
+                    {
+                        Success = true,
+                        OrderId = result.OrderId,
+                        PositionId = result.PositionId,
+                        ErrorMessage = "Order filled but failed to set SL/TP — set them manually"
+                    };
+                }
+            }
+
+            return result;
         }
         catch (TimeoutException)
         {

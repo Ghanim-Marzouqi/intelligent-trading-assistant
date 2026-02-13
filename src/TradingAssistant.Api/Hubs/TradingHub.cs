@@ -48,7 +48,7 @@ public class TradingHub : Hub<ITradingHubClient>
 }
 
 public record PriceUpdate(string Symbol, decimal Bid, decimal Ask, DateTime Timestamp);
-public record AlertNotification(long AlertId, string Symbol, string Message, string Severity, DateTime TriggeredAt);
+public record AlertNotification(long AlertId, string Symbol, string Message, string Severity, DateTime TriggeredAt, string? AiEnrichment = null);
 public record PositionUpdate(long PositionId, string Symbol, string Direction, decimal Volume, decimal EntryPrice, decimal CurrentPrice, decimal PnL);
 public record AccountUpdate(decimal Balance, decimal Equity, decimal Margin, decimal FreeMargin, decimal MarginLevel);
 public record TradeNotification(long TradeId, string Symbol, string Direction, decimal Volume, decimal EntryPrice, decimal? ExitPrice, decimal PnL);

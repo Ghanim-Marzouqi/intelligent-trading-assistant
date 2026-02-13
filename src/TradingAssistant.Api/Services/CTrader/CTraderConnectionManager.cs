@@ -105,6 +105,12 @@ public class CTraderConnectionManager : ICTraderConnectionManager, IDisposable
                 error.ErrorCode, error.Description);
         });
 
+        _client.OfType<ProtoOAOrderErrorEvent>().Subscribe(error =>
+        {
+            _logger.LogError("cTrader order error: {ErrorCode} - {Description}",
+                error.ErrorCode, error.Description);
+        });
+
         await _client.Connect();
         _logger.LogInformation("WebSocket connected to cTrader");
 
