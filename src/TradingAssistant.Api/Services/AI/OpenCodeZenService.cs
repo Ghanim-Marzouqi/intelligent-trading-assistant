@@ -2,27 +2,38 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using TradingAssistant.Api.Data;
+using TradingAssistant.Api.Services.Alerts.Indicators;
+using TradingAssistant.Api.Services.CTrader;
 
 namespace TradingAssistant.Api.Services.AI;
 
 public class OpenCodeZenService : IAiAnalysisService
 {
+    private static readonly JsonSerializerOptions LlmJsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true,
+        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower
+    };
+
     private readonly HttpClient _httpClient;
     private readonly IConfiguration _config;
     private readonly AppDbContext _db;
     private readonly ILogger<OpenCodeZenService> _logger;
+    private readonly ICTraderPriceStream _priceStream;
     private readonly bool _isConfigured;
 
     public OpenCodeZenService(
         HttpClient httpClient,
         IConfiguration config,
         AppDbContext db,
-        ILogger<OpenCodeZenService> logger)
+        ILogger<OpenCodeZenService> logger,
+        ICTraderPriceStream priceStream)
     {
         _httpClient = httpClient;
         _config = config;
         _db = db;
         _logger = logger;
+        _priceStream = priceStream;
 
         var apiKey = _config["AiProvider:ApiKey"];
         _isConfigured = !string.IsNullOrWhiteSpace(apiKey);
@@ -52,18 +63,23 @@ public class OpenCodeZenService : IAiAnalysisService
     {
         _logger.LogInformation("Analyzing market for {Symbol} on {Timeframe}", symbol, timeframe);
 
-        var prompt = $$"""
-            Analyze the current market conditions for {{symbol}} on the {{timeframe}} timeframe.
+        var ctx = await BuildMarketDataContextAsync(symbol);
 
-            Provide your analysis in the following JSON format:
+        var prompt = $$"""
+            {{ctx.Text}}
+
+            Based on the market data above, analyze the current conditions for {{symbol}} on the {{timeframe}} timeframe.
+            Reference the actual price levels and indicator values provided. Do NOT fabricate or guess prices.
+
+            Respond ONLY with valid JSON in this exact format (no markdown, no code fences):
             {
                 "pair": "{{symbol}}",
                 "bias": "bullish|bearish|neutral",
                 "confidence": 0.0-1.0,
-                "key_levels": { "support": 0.0, "resistance": 0.0 },
+                "key_levels": { "support": 0, "resistance": 0 },
                 "risk_events": ["event1", "event2"],
                 "recommendation": "buy|sell|wait|reduce_exposure",
-                "reasoning": "detailed explanation"
+                "reasoning": "detailed explanation referencing the real data"
             }
             """;
 
@@ -71,12 +87,17 @@ public class OpenCodeZenService : IAiAnalysisService
 
         try
         {
-            var analysis = JsonSerializer.Deserialize<MarketAnalysis>(response, new JsonSerializerOptions
-            {
-                PropertyNameCaseInsensitive = true
-            });
+            var analysis = JsonSerializer.Deserialize<MarketAnalysis>(response, LlmJsonOptions);
 
-            return analysis ?? new MarketAnalysis { Pair = symbol };
+            if (analysis is not null)
+            {
+                // Override with computed values — never trust the LLM for numeric fields
+                analysis.KeyLevels.Support = ctx.Support;
+                analysis.KeyLevels.Resistance = ctx.Resistance;
+                return analysis;
+            }
+
+            return new MarketAnalysis { Pair = symbol };
         }
         catch (JsonException ex)
         {
@@ -84,6 +105,7 @@ public class OpenCodeZenService : IAiAnalysisService
             return new MarketAnalysis
             {
                 Pair = symbol,
+                KeyLevels = new KeyLevels { Support = ctx.Support, Resistance = ctx.Resistance },
                 Reasoning = response
             };
         }
@@ -93,12 +115,17 @@ public class OpenCodeZenService : IAiAnalysisService
     {
         _logger.LogDebug("Enriching alert for {Symbol} at {Price}", symbol, price);
 
+        var ctx = await BuildMarketDataContextAsync(symbol);
+
         var prompt = $"""
+            {ctx.Text}
+
             An alert was triggered for {symbol} at price {price}.
             Original alert: {alertMessage}
 
-            Provide brief market context (2-3 sentences) explaining why this price level
-            is significant and what traders should watch for next.
+            Using the market data above, provide brief market context (2-3 sentences)
+            explaining why this price level is significant and what traders should watch for next.
+            Reference actual indicator values in your response.
             """;
 
         return await CallApiAsync(prompt);
@@ -145,10 +172,7 @@ public class OpenCodeZenService : IAiAnalysisService
 
         try
         {
-            var review = JsonSerializer.Deserialize<TradeReview>(response, new JsonSerializerOptions
-            {
-                PropertyNameCaseInsensitive = true
-            });
+            var review = JsonSerializer.Deserialize<TradeReview>(response, LlmJsonOptions);
 
             if (review is not null)
                 review.TradeId = tradeId;
@@ -208,10 +232,7 @@ public class OpenCodeZenService : IAiAnalysisService
 
         try
         {
-            return JsonSerializer.Deserialize<NewsSentiment>(response, new JsonSerializerOptions
-            {
-                PropertyNameCaseInsensitive = true
-            }) ?? new NewsSentiment { Symbol = symbol };
+            return JsonSerializer.Deserialize<NewsSentiment>(response, LlmJsonOptions) ?? new NewsSentiment { Symbol = symbol };
         }
         catch (JsonException)
         {
@@ -221,6 +242,98 @@ public class OpenCodeZenService : IAiAnalysisService
                 OverallSentiment = "unknown"
             };
         }
+    }
+
+    private record MarketDataContext(string Text, decimal Support, decimal Resistance);
+
+    private async Task<MarketDataContext> BuildMarketDataContextAsync(string symbol)
+    {
+        const int minTicks = 5;
+        const int maxWaitMs = 10_000;
+        const int pollIntervalMs = 250;
+
+        // Auto-subscribe so the price stream has data for this symbol
+        var currentPrice = _priceStream.GetCurrentPrice(symbol);
+        var wasAlreadySubscribed = currentPrice is not null;
+
+        if (currentPrice is null)
+        {
+            _logger.LogInformation("No price data for {Symbol}, auto-subscribing and waiting for ticks...", symbol);
+            await _priceStream.SubscribeAsync(symbol);
+        }
+
+        // Wait for enough ticks to compute meaningful indicators
+        var elapsed = 0;
+        while (elapsed < maxWaitMs)
+        {
+            currentPrice = _priceStream.GetCurrentPrice(symbol);
+            var tickCount = _priceStream.GetPriceHistory(symbol).Count;
+            if (currentPrice is not null && (tickCount >= minTicks || (wasAlreadySubscribed && tickCount >= 1)))
+                break;
+            await Task.Delay(pollIntervalMs);
+            elapsed += pollIntervalMs;
+        }
+
+        // Final read after wait
+        currentPrice = _priceStream.GetCurrentPrice(symbol);
+
+        if (currentPrice is null)
+            return new MarketDataContext(
+                $"[No live market data available for {symbol} — the price feed did not respond.]",
+                0m, 0m);
+
+        var (bid, ask) = currentPrice.Value;
+        var spread = ask - bid;
+        var history = _priceStream.GetPriceHistory(symbol);
+
+        _logger.LogInformation("Building market context for {Symbol}: {TickCount} ticks, bid={Bid}, ask={Ask}",
+            symbol, history.Count, bid, ask);
+
+        decimal sessionHigh = bid, sessionLow = bid;
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine($"=== LIVE MARKET DATA for {symbol} ===");
+        sb.AppendLine($"Current Bid: {bid}");
+        sb.AppendLine($"Current Ask: {ask}");
+        sb.AppendLine($"Spread: {spread}");
+        sb.AppendLine($"Tick samples: {history.Count}");
+
+        if (history.Count > 0)
+        {
+            sessionHigh = history.Max();
+            sessionLow = history.Min();
+            sb.AppendLine($"Session High: {sessionHigh}");
+            sb.AppendLine($"Session Low: {sessionLow}");
+        }
+
+        decimal support = sessionLow;
+        decimal resistance = sessionHigh;
+
+        if (history.Count >= 15) // RSI needs period + 1
+        {
+            var rsi = new RsiCalculator(14).Calculate(history);
+            sb.AppendLine($"RSI(14): {rsi}");
+        }
+
+        if (history.Count >= 26) // MACD needs slow period
+        {
+            var macd = new MacdCalculator(12, 26, 9).Calculate(history);
+            sb.AppendLine($"MACD Line: {macd.MacdLine:F6}");
+            sb.AppendLine($"MACD Signal: {macd.SignalLine:F6}");
+            sb.AppendLine($"MACD Histogram: {macd.Histogram:F6}");
+        }
+
+        if (history.Count >= 20) // Bollinger needs period
+        {
+            var bb = new BollingerCalculator(20, 2m).Calculate(history);
+            sb.AppendLine($"Bollinger Upper: {bb.Upper}");
+            sb.AppendLine($"Bollinger Middle: {bb.Middle}");
+            sb.AppendLine($"Bollinger Lower: {bb.Lower}");
+            support = bb.Lower;
+            resistance = bb.Upper;
+        }
+
+        sb.AppendLine("=== END MARKET DATA ===");
+        return new MarketDataContext(sb.ToString(), Math.Round(support, 5), Math.Round(resistance, 5));
     }
 
     private async Task<string> CallApiAsync(string prompt)
@@ -258,7 +371,7 @@ public class OpenCodeZenService : IAiAnalysisService
         try
         {
             var result = JsonSerializer.Deserialize<OpenAiResponse>(responseBody,
-                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true, PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower });
             var message = result?.Choices?.FirstOrDefault()?.Message;
             // Thinking models put output in content, reasoning in reasoning_content
             return !string.IsNullOrEmpty(message?.Content) ? message.Content

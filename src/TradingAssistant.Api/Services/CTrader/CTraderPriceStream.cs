@@ -13,6 +13,8 @@ public interface ICTraderPriceStream
     Task SubscribeAsync(string symbol);
     Task UnsubscribeAsync(string symbol);
     event EventHandler<PriceUpdateEventArgs>? OnPriceUpdate;
+    (decimal Bid, decimal Ask)? GetCurrentPrice(string symbol);
+    IReadOnlyList<decimal> GetPriceHistory(string symbol);
 }
 
 public class CTraderPriceStream : ICTraderPriceStream
@@ -22,7 +24,10 @@ public class CTraderPriceStream : ICTraderPriceStream
     private readonly IHubContext<TradingHub, ITradingHubClient> _hubContext;
     private readonly ILogger<CTraderPriceStream> _logger;
     private readonly ConcurrentDictionary<string, decimal> _lastPrices = new();
+    private readonly ConcurrentDictionary<string, decimal> _lastAsks = new();
+    private readonly ConcurrentDictionary<string, List<decimal>> _priceHistory = new();
     private readonly HashSet<string> _subscribedSymbols = [];
+    private const int MaxPriceHistory = 100;
 
     private IDisposable? _spotSubscription;
 
@@ -144,6 +149,15 @@ public class CTraderPriceStream : ICTraderPriceStream
     private async Task HandlePriceUpdate(string symbol, decimal bid, decimal ask)
     {
         _lastPrices[symbol] = bid;
+        _lastAsks[symbol] = ask;
+
+        var history = _priceHistory.GetOrAdd(symbol, _ => new List<decimal>());
+        lock (history)
+        {
+            history.Add(bid);
+            if (history.Count > MaxPriceHistory)
+                history.RemoveAt(0);
+        }
 
         var update = new PriceUpdate(symbol, bid, ask, DateTime.UtcNow);
 
@@ -152,6 +166,27 @@ public class CTraderPriceStream : ICTraderPriceStream
 
         // Raise event for internal consumers (Alert Engine, etc.)
         OnPriceUpdate?.Invoke(this, new PriceUpdateEventArgs(symbol, bid, ask));
+    }
+
+    public (decimal Bid, decimal Ask)? GetCurrentPrice(string symbol)
+    {
+        symbol = symbol.ToUpperInvariant();
+        if (_lastPrices.TryGetValue(symbol, out var bid) && _lastAsks.TryGetValue(symbol, out var ask))
+            return (bid, ask);
+        return null;
+    }
+
+    public IReadOnlyList<decimal> GetPriceHistory(string symbol)
+    {
+        symbol = symbol.ToUpperInvariant();
+        if (_priceHistory.TryGetValue(symbol, out var history))
+        {
+            lock (history)
+            {
+                return history.ToList();
+            }
+        }
+        return [];
     }
 }
 

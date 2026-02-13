@@ -16,7 +16,6 @@ public interface ICTraderAccountStream
     event EventHandler<PositionEventArgs>? OnPositionOpened;
     event EventHandler<PositionEventArgs>? OnPositionClosed;
     event EventHandler<PositionEventArgs>? OnPositionModified;
-    event EventHandler<OrderEventArgs>? OnOrderFilled;
 }
 
 public class CTraderAccountStream : ICTraderAccountStream
@@ -32,7 +31,6 @@ public class CTraderAccountStream : ICTraderAccountStream
     public event EventHandler<PositionEventArgs>? OnPositionOpened;
     public event EventHandler<PositionEventArgs>? OnPositionClosed;
     public event EventHandler<PositionEventArgs>? OnPositionModified;
-    public event EventHandler<OrderEventArgs>? OnOrderFilled;
 
     public CTraderAccountStream(
         ICTraderConnectionManager connectionManager,
