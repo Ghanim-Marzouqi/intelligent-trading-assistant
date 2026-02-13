@@ -3,6 +3,7 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { HttpClient } from '@angular/common/http';
 import { environment } from '../../environments/environment';
+import { ConfirmDialogService } from '../shared/services/confirm-dialog.service';
 
 interface SymbolInfo {
   name: string;
@@ -24,6 +25,10 @@ interface WatchlistResponse {
   symbols: WatchlistEntry[];
   scheduleUtcHours: number[];
   autoPrepareMinConfidence: number;
+  maxOpenPositions: number;
+  maxTotalVolume: number;
+  maxPositionsPerSymbol: number;
+  maxDailyLossPercent: number;
 }
 
 @Component({
@@ -99,6 +104,36 @@ interface WatchlistResponse {
                 [(ngModel)]="minConfidence"
                 (ngModelChange)="onSettingsChange()" />
               <span class="confidence-pct">%</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="risk-limits-section">
+          <span class="info-label">Risk Limits</span>
+          <div class="risk-limits-grid">
+            <div class="risk-field">
+              <label>Max Open Positions</label>
+              <input type="number" min="1" max="20" step="1"
+                [(ngModel)]="maxOpenPositions"
+                (ngModelChange)="onSettingsChange()" />
+            </div>
+            <div class="risk-field">
+              <label>Max Total Volume</label>
+              <input type="number" min="0.01" max="100" step="0.5"
+                [(ngModel)]="maxTotalVolume"
+                (ngModelChange)="onSettingsChange()" />
+            </div>
+            <div class="risk-field">
+              <label>Max Positions Per Symbol</label>
+              <input type="number" min="1" max="10" step="1"
+                [(ngModel)]="maxPositionsPerSymbol"
+                (ngModelChange)="onSettingsChange()" />
+            </div>
+            <div class="risk-field">
+              <label>Max Daily Loss %</label>
+              <input type="number" min="0.5" max="20" step="0.5"
+                [(ngModel)]="maxDailyLossPercent"
+                (ngModelChange)="onSettingsChange()" />
             </div>
           </div>
         </div>
@@ -186,26 +221,28 @@ interface WatchlistResponse {
             <p class="text-muted">Add symbols to be analyzed on the scheduled scan times above.</p>
           </div>
         } @else {
-          <table>
-            <thead>
-              <tr>
-                <th>Symbol</th>
-                <th>Added At</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              @for (entry of watchlist; track entry.id) {
+          <div class="table-scroll table-scroll--no-cards">
+            <table>
+              <thead>
                 <tr>
-                  <td><strong>{{ entry.symbol }}</strong></td>
-                  <td>{{ entry.addedAt | date:'medium' }}</td>
-                  <td>
-                    <button class="danger small" (click)="removeSymbol(entry)">Remove</button>
-                  </td>
+                  <th>Symbol</th>
+                  <th>Added At</th>
+                  <th>Actions</th>
                 </tr>
-              }
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                @for (entry of watchlist; track entry.id) {
+                  <tr>
+                    <td><strong>{{ entry.symbol }}</strong></td>
+                    <td>{{ entry.addedAt | date:'medium' }}</td>
+                    <td>
+                      <button class="danger small" (click)="removeSymbol(entry)">Remove</button>
+                    </td>
+                  </tr>
+                }
+              </tbody>
+            </table>
+          </div>
         }
       </div>
     </div>
@@ -347,6 +384,44 @@ interface WatchlistResponse {
     .confidence-pct {
       font-size: 13px;
       color: var(--text-muted);
+    }
+
+    .risk-limits-section {
+      margin-top: 20px;
+      padding-top: 16px;
+      border-top: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .risk-limits-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+      gap: 12px;
+    }
+
+    .risk-field {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .risk-field label {
+      font-size: 11px;
+      font-weight: 500;
+      color: var(--text-muted);
+    }
+
+    .risk-field input {
+      width: 100%;
+      padding: 6px 8px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      color: var(--text);
+      font-size: 13px;
+      font-family: var(--font-mono);
     }
 
     .success-text {
@@ -549,6 +624,57 @@ interface WatchlistResponse {
       color: var(--text-muted);
       font-size: 13px;
     }
+
+    @media (max-width: 768px) {
+      .schedule-info {
+        flex-direction: column;
+        gap: 16px;
+      }
+
+      .hour-select {
+        width: 100%;
+        min-width: 0;
+      }
+
+      .add-form {
+        flex-direction: column;
+        align-items: stretch;
+      }
+
+      .add-btn {
+        width: 100%;
+      }
+
+      .confidence-item {
+        min-width: 0;
+      }
+
+      .risk-limits-grid {
+        grid-template-columns: repeat(2, 1fr);
+      }
+    }
+
+    @media (max-width: 480px) {
+      .symbol-dropdown {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        top: auto;
+        max-height: 60vh;
+        margin-top: 0;
+        border-radius: 12px 12px 0 0;
+        z-index: 200;
+      }
+
+      .symbol-list {
+        max-height: 50vh;
+      }
+
+      .risk-limits-grid {
+        grid-template-columns: 1fr;
+      }
+    }
   `]
 })
 export class WatchlistComponent implements OnInit {
@@ -557,9 +683,19 @@ export class WatchlistComponent implements OnInit {
   minConfidence = 70;
   loading = true;
 
+  // Risk limits
+  maxOpenPositions = 3;
+  maxTotalVolume = 10;
+  maxPositionsPerSymbol = 3;
+  maxDailyLossPercent = 5;
+
   // Settings editing state
   savedScheduleHours: number[] = [];
   savedMinConfidence = 70;
+  savedMaxOpenPositions = 3;
+  savedMaxTotalVolume = 10;
+  savedMaxPositionsPerSymbol = 3;
+  savedMaxDailyLossPercent = 5;
   settingsDirty = false;
   savingSettings = false;
   settingsError = '';
@@ -604,7 +740,7 @@ export class WatchlistComponent implements OnInit {
     23: 'Sydney',
   };
 
-  constructor(private http: HttpClient, private elRef: ElementRef) {}
+  constructor(private http: HttpClient, private elRef: ElementRef, private dialog: ConfirmDialogService) {}
 
   ngOnInit() {
     this.loadWatchlist();
@@ -752,12 +888,20 @@ export class WatchlistComponent implements OnInit {
     this.settingsError = '';
     this.settingsDirty =
       JSON.stringify(this.scheduleHours) !== JSON.stringify(this.savedScheduleHours) ||
-      this.minConfidence !== this.savedMinConfidence;
+      this.minConfidence !== this.savedMinConfidence ||
+      this.maxOpenPositions !== this.savedMaxOpenPositions ||
+      this.maxTotalVolume !== this.savedMaxTotalVolume ||
+      this.maxPositionsPerSymbol !== this.savedMaxPositionsPerSymbol ||
+      this.maxDailyLossPercent !== this.savedMaxDailyLossPercent;
   }
 
   discardSettings() {
     this.scheduleHours = [...this.savedScheduleHours];
     this.minConfidence = this.savedMinConfidence;
+    this.maxOpenPositions = this.savedMaxOpenPositions;
+    this.maxTotalVolume = this.savedMaxTotalVolume;
+    this.maxPositionsPerSymbol = this.savedMaxPositionsPerSymbol;
+    this.maxDailyLossPercent = this.savedMaxDailyLossPercent;
     this.settingsDirty = false;
     this.settingsError = '';
     this.settingsSaved = false;
@@ -768,18 +912,37 @@ export class WatchlistComponent implements OnInit {
     this.settingsError = '';
     this.settingsSaved = false;
 
-    this.http.put<{ scheduleUtcHours: number[]; autoPrepareMinConfidence: number }>(
+    this.http.put<{
+      scheduleUtcHours: number[];
+      autoPrepareMinConfidence: number;
+      maxOpenPositions: number;
+      maxTotalVolume: number;
+      maxPositionsPerSymbol: number;
+      maxDailyLossPercent: number;
+    }>(
       `${environment.apiUrl}/api/watchlist/settings`,
       {
         scheduleUtcHours: this.scheduleHours,
-        autoPrepareMinConfidence: this.minConfidence
+        autoPrepareMinConfidence: this.minConfidence,
+        maxOpenPositions: this.maxOpenPositions,
+        maxTotalVolume: this.maxTotalVolume,
+        maxPositionsPerSymbol: this.maxPositionsPerSymbol,
+        maxDailyLossPercent: this.maxDailyLossPercent
       }
     ).subscribe({
       next: (data) => {
         this.scheduleHours = data.scheduleUtcHours;
         this.minConfidence = data.autoPrepareMinConfidence;
+        this.maxOpenPositions = data.maxOpenPositions;
+        this.maxTotalVolume = data.maxTotalVolume;
+        this.maxPositionsPerSymbol = data.maxPositionsPerSymbol;
+        this.maxDailyLossPercent = data.maxDailyLossPercent;
         this.savedScheduleHours = [...this.scheduleHours];
         this.savedMinConfidence = this.minConfidence;
+        this.savedMaxOpenPositions = this.maxOpenPositions;
+        this.savedMaxTotalVolume = this.maxTotalVolume;
+        this.savedMaxPositionsPerSymbol = this.maxPositionsPerSymbol;
+        this.savedMaxDailyLossPercent = this.maxDailyLossPercent;
         this.settingsDirty = false;
         this.savingSettings = false;
         this.settingsSaved = true;
@@ -797,8 +960,16 @@ export class WatchlistComponent implements OnInit {
         this.watchlist = data.symbols;
         this.scheduleHours = data.scheduleUtcHours;
         this.minConfidence = data.autoPrepareMinConfidence;
+        this.maxOpenPositions = data.maxOpenPositions;
+        this.maxTotalVolume = data.maxTotalVolume;
+        this.maxPositionsPerSymbol = data.maxPositionsPerSymbol;
+        this.maxDailyLossPercent = data.maxDailyLossPercent;
         this.savedScheduleHours = [...data.scheduleUtcHours];
         this.savedMinConfidence = data.autoPrepareMinConfidence;
+        this.savedMaxOpenPositions = data.maxOpenPositions;
+        this.savedMaxTotalVolume = data.maxTotalVolume;
+        this.savedMaxPositionsPerSymbol = data.maxPositionsPerSymbol;
+        this.savedMaxDailyLossPercent = data.maxDailyLossPercent;
         this.settingsDirty = false;
         this.loading = false;
       },
@@ -828,11 +999,16 @@ export class WatchlistComponent implements OnInit {
     });
   }
 
-  removeSymbol(entry: WatchlistEntry) {
-    if (confirm(`Remove ${entry.symbol} from watchlist?`)) {
-      this.http.delete(`${environment.apiUrl}/api/watchlist/${entry.id}`).subscribe({
-        next: () => this.loadWatchlist()
-      });
-    }
+  async removeSymbol(entry: WatchlistEntry) {
+    const ok = await this.dialog.confirm({
+      title: 'Remove Symbol',
+      message: `Remove ${entry.symbol} from watchlist?`,
+      confirmText: 'Remove',
+      variant: 'danger'
+    });
+    if (!ok) return;
+    this.http.delete(`${environment.apiUrl}/api/watchlist/${entry.id}`).subscribe({
+      next: () => this.loadWatchlist()
+    });
   }
 }

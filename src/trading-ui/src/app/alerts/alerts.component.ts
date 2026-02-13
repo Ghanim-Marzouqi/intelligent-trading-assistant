@@ -3,6 +3,7 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { HttpClient } from '@angular/common/http';
 import { environment } from '../../environments/environment';
+import { ConfirmDialogService } from '../shared/services/confirm-dialog.service';
 
 interface SymbolInfo {
   name: string;
@@ -204,68 +205,72 @@ const operatorLabels: Record<number, string> = {
         @if (alerts.length === 0) {
           <p class="empty-state">No active alerts</p>
         } @else {
-          <table>
-            <thead>
-              <tr>
-                <th>Symbol</th>
-                <th>Name</th>
-                <th>Conditions</th>
-                <th>Options</th>
-                <th>Triggers</th>
-                <th>Last Triggered</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              @for (alert of alerts; track alert.id) {
+          <div class="table-scroll">
+            <table>
+              <thead>
                 <tr>
-                  <td><strong>{{ alert.symbol }}</strong></td>
-                  <td>
-                    {{ alert.name }}
-                    @if (alert.description) {
-                      <br><span class="text-muted text-sm">{{ alert.description }}</span>
-                    }
-                  </td>
-                  <td>
-                    @if (alert.conditions && alert.conditions.length > 0) {
-                      <span class="badge">{{ alert.conditions.length }} rule(s)</span>
-                      <div class="conditions-preview">
-                        @for (c of alert.conditions; track $index; let i = $index) {
-                          @if (i > 0) {
-                            <span class="combiner-text">{{ c.combineWith === 1 ? 'OR' : 'AND' }}</span>
+                  <th>Symbol</th>
+                  <th>Name</th>
+                  <th>Conditions</th>
+                  <th>Options</th>
+                  <th>Triggers</th>
+                  <th>Last Triggered</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                @for (alert of alerts; track alert.id) {
+                  <tr>
+                    <td data-label="Symbol"><strong>{{ alert.symbol }}</strong></td>
+                    <td data-label="Name">
+                      {{ alert.name }}
+                      @if (alert.description) {
+                        <br><span class="text-muted text-sm">{{ alert.description }}</span>
+                      }
+                    </td>
+                    <td data-label="Conditions">
+                      @if (alert.conditions && alert.conditions.length > 0) {
+                        <span class="badge">{{ alert.conditions.length }} rule(s)</span>
+                        <div class="conditions-preview">
+                          @for (c of alert.conditions; track $index; let i = $index) {
+                            @if (i > 0) {
+                              <span class="combiner-text">{{ c.combineWith === 1 ? 'OR' : 'AND' }}</span>
+                            }
+                            <span class="condition-text">{{ conditionTypeLabel(c.type) }} {{ operatorLabel(c.operator) }} {{ c.value }}</span>
                           }
-                          <span class="condition-text">{{ conditionTypeLabel(c.type) }} {{ operatorLabel(c.operator) }} {{ c.value }}</span>
+                        </div>
+                      } @else {
+                        <span class="text-muted">-</span>
+                      }
+                    </td>
+                    <td data-label="Options">
+                      <div class="option-badges">
+                        @if (alert.autoPrepareOrder) {
+                          <span class="badge badge-auto">Auto-Order</span>
+                        }
+                        @if (alert.aiEnrichEnabled) {
+                          <span class="badge badge-ai">AI</span>
+                        }
+                        @if (alert.maxTriggers) {
+                          <span class="badge badge-max">Max: {{ alert.maxTriggers }}</span>
                         }
                       </div>
-                    } @else {
-                      <span class="text-muted">-</span>
-                    }
-                  </td>
-                  <td>
-                    <div class="option-badges">
-                      @if (alert.autoPrepareOrder) {
-                        <span class="badge badge-auto">Auto-Order</span>
-                      }
-                      @if (alert.aiEnrichEnabled) {
-                        <span class="badge badge-ai">AI</span>
-                      }
-                      @if (alert.maxTriggers) {
-                        <span class="badge badge-max">Max: {{ alert.maxTriggers }}</span>
-                      }
-                    </div>
-                  </td>
-                  <td>{{ alert.triggerCount }}</td>
-                  <td>{{ alert.lastTriggeredAt ? (alert.lastTriggeredAt | date:'short') : 'Never' }}</td>
-                  <td>
-                    <button class="small" (click)="toggleAlert(alert)">
-                      {{ alert.isActive ? 'Disable' : 'Enable' }}
-                    </button>
-                    <button class="danger small" (click)="deleteAlert(alert.id)">Delete</button>
-                  </td>
-                </tr>
-              }
-            </tbody>
-          </table>
+                    </td>
+                    <td data-label="Triggers">{{ alert.triggerCount }}</td>
+                    <td data-label="Last Triggered">{{ alert.lastTriggeredAt ? (alert.lastTriggeredAt | date:'short') : 'Never' }}</td>
+                    <td data-label="Actions">
+                      <div class="card-actions">
+                        <button class="small" (click)="toggleAlert(alert)">
+                          {{ alert.isActive ? 'Disable' : 'Enable' }}
+                        </button>
+                        <button class="danger small" (click)="deleteAlert(alert.id)">Delete</button>
+                      </div>
+                    </td>
+                  </tr>
+                }
+              </tbody>
+            </table>
+          </div>
         }
       </div>
 
@@ -274,26 +279,28 @@ const operatorLabels: Record<number, string> = {
         @if (history.length === 0) {
           <p class="empty-state">No alerts triggered yet</p>
         } @else {
-          <table>
-            <thead>
-              <tr>
-                <th>Symbol</th>
-                <th>Message</th>
-                <th>Price</th>
-                <th>Triggered At</th>
-              </tr>
-            </thead>
-            <tbody>
-              @for (trigger of history; track trigger.id) {
+          <div class="table-scroll table-scroll--no-cards">
+            <table>
+              <thead>
                 <tr>
-                  <td>{{ trigger.symbol }}</td>
-                  <td>{{ trigger.message }}</td>
-                  <td>{{ trigger.triggerPrice }}</td>
-                  <td>{{ trigger.triggeredAt | date:'medium' }}</td>
+                  <th>Symbol</th>
+                  <th>Message</th>
+                  <th>Price</th>
+                  <th>Triggered At</th>
                 </tr>
-              }
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                @for (trigger of history; track trigger.id) {
+                  <tr>
+                    <td>{{ trigger.symbol }}</td>
+                    <td>{{ trigger.message }}</td>
+                    <td>{{ trigger.triggerPrice }}</td>
+                    <td>{{ trigger.triggeredAt | date:'medium' }}</td>
+                  </tr>
+                }
+              </tbody>
+            </table>
+          </div>
         }
       </div>
     </div>
@@ -583,6 +590,56 @@ const operatorLabels: Record<number, string> = {
     .symbol-name { font-weight: 600; font-size: 13px; min-width: 90px; font-family: var(--font-mono); }
     .symbol-desc { font-size: 12px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .symbol-no-match { padding: 20px 12px; text-align: center; color: var(--text-muted); font-size: 13px; }
+
+    @media (max-width: 768px) {
+      .form-row {
+        grid-template-columns: 1fr;
+      }
+
+      .condition-row {
+        flex-wrap: wrap;
+      }
+
+      .cond-type, .cond-op, .cond-value {
+        width: 100%;
+        flex: 1;
+        min-width: 0;
+      }
+
+      .options-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .form-actions {
+        flex-direction: column;
+      }
+
+      .form-actions button {
+        width: 100%;
+      }
+
+      button.small {
+        margin-right: 0;
+      }
+    }
+
+    @media (max-width: 480px) {
+      .symbol-dropdown {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        top: auto;
+        max-height: 60vh;
+        margin-top: 0;
+        border-radius: 12px 12px 0 0;
+        z-index: 200;
+      }
+
+      .symbol-list {
+        max-height: 50vh;
+      }
+    }
   `]
 })
 export class AlertsComponent implements OnInit {
@@ -597,7 +654,7 @@ export class AlertsComponent implements OnInit {
   showSymbolDropdown = false;
   activeCategory = 'All';
 
-  constructor(private http: HttpClient, private elRef: ElementRef) {}
+  constructor(private http: HttpClient, private elRef: ElementRef, private dialog: ConfirmDialogService) {}
 
   ngOnInit() {
     this.loadAlerts();
@@ -765,11 +822,16 @@ export class AlertsComponent implements OnInit {
     });
   }
 
-  deleteAlert(id: number) {
-    if (confirm('Are you sure you want to delete this alert?')) {
-      this.http.delete(`${environment.apiUrl}/api/alerts/${id}`).subscribe({
-        next: () => this.loadAlerts()
-      });
-    }
+  async deleteAlert(id: number) {
+    const ok = await this.dialog.confirm({
+      title: 'Delete Alert',
+      message: 'Are you sure you want to delete this alert?',
+      confirmText: 'Delete',
+      variant: 'danger'
+    });
+    if (!ok) return;
+    this.http.delete(`${environment.apiUrl}/api/alerts/${id}`).subscribe({
+      next: () => this.loadAlerts()
+    });
   }
 }

@@ -1,13 +1,26 @@
-import { Component, inject } from '@angular/core';
-import { RouterOutlet, RouterLink, RouterLinkActive } from '@angular/router';
+import { Component, inject, OnInit, OnDestroy } from '@angular/core';
+import { RouterOutlet, RouterLink, RouterLinkActive, Router, NavigationEnd } from '@angular/router';
+import { Subscription } from 'rxjs';
+import { filter } from 'rxjs/operators';
 import { AuthService } from './auth/auth.service';
+import { ConfirmDialogComponent } from './shared/components/confirm-dialog.component';
 
 @Component({
   selector: 'app-root',
   standalone: true,
-  imports: [RouterOutlet, RouterLink, RouterLinkActive],
+  imports: [RouterOutlet, RouterLink, RouterLinkActive, ConfirmDialogComponent],
   template: `
-    <div class="app-container">
+    <button class="hamburger" (click)="sidebarOpen = !sidebarOpen" [attr.aria-label]="sidebarOpen ? 'Close menu' : 'Open menu'">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        @if (sidebarOpen) {
+          <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+        } @else {
+          <line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/>
+        }
+      </svg>
+    </button>
+    <div class="sidebar-overlay" [class.visible]="sidebarOpen" (click)="sidebarOpen = false"></div>
+    <div class="app-container" [class.sidebar-open]="sidebarOpen">
       <nav class="sidebar">
         <div class="logo">
           <svg class="logo-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -86,6 +99,7 @@ import { AuthService } from './auth/auth.service';
         <router-outlet></router-outlet>
       </main>
     </div>
+    <app-confirm-dialog></app-confirm-dialog>
   `,
   styles: [`
     .app-container {
@@ -187,10 +201,103 @@ import { AuthService } from './auth/auth.service';
         color: var(--danger);
       }
     }
+
+    /* Hamburger button — hidden on desktop */
+    .hamburger {
+      display: none;
+      position: fixed;
+      top: 12px;
+      left: 12px;
+      z-index: 1001;
+      width: 44px;
+      height: 44px;
+      align-items: center;
+      justify-content: center;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      color: var(--text);
+      padding: 0;
+      cursor: pointer;
+
+      svg {
+        width: 22px;
+        height: 22px;
+      }
+    }
+
+    /* Overlay — hidden on desktop */
+    .sidebar-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 999;
+      background: rgba(0, 0, 0, 0.5);
+      opacity: 0;
+      transition: opacity 0.3s;
+      pointer-events: none;
+
+      &.visible {
+        opacity: 1;
+        pointer-events: auto;
+      }
+    }
+
+    @media (max-width: 768px) {
+      .hamburger {
+        display: flex;
+      }
+
+      .sidebar-overlay {
+        display: block;
+      }
+
+      .sidebar {
+        position: fixed;
+        top: 0;
+        left: 0;
+        bottom: 0;
+        z-index: 1000;
+        transform: translateX(-100%);
+        transition: transform 0.3s ease;
+      }
+
+      .sidebar-open .sidebar {
+        transform: translateX(0);
+      }
+
+      .main-content {
+        padding: 16px;
+        padding-top: 64px;
+      }
+    }
+
+    @media (max-width: 480px) {
+      .main-content {
+        padding: 12px;
+        padding-top: 64px;
+      }
+    }
   `]
 })
-export class AppComponent {
+export class AppComponent implements OnInit, OnDestroy {
   private authService = inject(AuthService);
+  private router = inject(Router);
+  private routerSub: Subscription | null = null;
+
+  sidebarOpen = false;
+
+  ngOnInit() {
+    this.routerSub = this.router.events
+      .pipe(filter(e => e instanceof NavigationEnd))
+      .subscribe(() => {
+        this.sidebarOpen = false;
+      });
+  }
+
+  ngOnDestroy() {
+    this.routerSub?.unsubscribe();
+  }
 
   logout() {
     this.authService.logout();

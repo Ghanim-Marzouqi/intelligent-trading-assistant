@@ -5,6 +5,7 @@ import { HttpClient } from '@angular/common/http';
 import { Subscription } from 'rxjs';
 import { environment } from '../../environments/environment';
 import { SignalRService, PriceUpdate } from '../shared/services/signalr.service';
+import { ConfirmDialogService } from '../shared/services/confirm-dialog.service';
 
 interface SymbolInfo {
   name: string;
@@ -256,64 +257,68 @@ interface OrderResult {
         } @else if (positions.length === 0) {
           <p class="empty-state">No open positions</p>
         } @else {
-          <table>
-            <thead>
-              <tr>
-                <th>Symbol</th>
-                <th>Direction</th>
-                <th>Volume (lots)</th>
-                <th>Notional</th>
-                <th>Entry Price</th>
-                <th>Current Price</th>
-                <th>SL</th>
-                <th>TP</th>
-                <th>P&L</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              @for (pos of positions; track pos.id) {
+          <div class="table-scroll">
+            <table>
+              <thead>
                 <tr>
-                  <td><strong>{{ pos.symbol }}</strong></td>
-                  <td [class.buy]="pos.direction === 'Buy'" [class.sell]="pos.direction === 'Sell'">
-                    {{ pos.direction }}
-                  </td>
-                  <td>{{ pos.volume }}</td>
-                  <td>{{ pos.notionalUsd | currency }}</td>
-                  <td>{{ pos.entryPrice }}</td>
-                  <td>{{ pos.currentPrice }}</td>
-                  <td>
-                    @if (editingPositionId === pos.id) {
-                      <input type="number" class="inline-input" [(ngModel)]="editSL" step="0.00001" placeholder="SL" />
-                    } @else {
-                      {{ pos.stopLoss || '-' }}
-                    }
-                  </td>
-                  <td>
-                    @if (editingPositionId === pos.id) {
-                      <input type="number" class="inline-input" [(ngModel)]="editTP" step="0.00001" placeholder="TP" />
-                    } @else {
-                      {{ pos.takeProfit || '-' }}
-                    }
-                  </td>
-                  <td [class.positive]="pos.unrealizedPnL > 0" [class.negative]="pos.unrealizedPnL < 0">
-                    {{ pos.unrealizedPnL | currency }}
-                  </td>
-                  <td class="actions-cell">
-                    @if (editingPositionId === pos.id) {
-                      <button class="success small" (click)="saveModify(pos.id)" [disabled]="modifying">
-                        {{ modifying ? '...' : 'Save' }}
-                      </button>
-                      <button class="small" (click)="cancelModify()">Cancel</button>
-                    } @else {
-                      <button class="small" (click)="startModify(pos)">Modify</button>
-                      <button class="danger small" (click)="closePosition(pos.id)">Close</button>
-                    }
-                  </td>
+                  <th>Symbol</th>
+                  <th>Direction</th>
+                  <th>Volume (lots)</th>
+                  <th>Notional</th>
+                  <th>Entry Price</th>
+                  <th>Current Price</th>
+                  <th>SL</th>
+                  <th>TP</th>
+                  <th>P&L</th>
+                  <th>Actions</th>
                 </tr>
-              }
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                @for (pos of positions; track pos.id) {
+                  <tr>
+                    <td data-label="Symbol"><strong>{{ pos.symbol }}</strong></td>
+                    <td data-label="Direction" [class.buy]="pos.direction === 'Buy'" [class.sell]="pos.direction === 'Sell'">
+                      {{ pos.direction }}
+                    </td>
+                    <td data-label="Volume">{{ pos.volume }}</td>
+                    <td data-label="Notional">{{ pos.notionalUsd | currency }}</td>
+                    <td data-label="Entry Price">{{ pos.entryPrice }}</td>
+                    <td data-label="Current Price">{{ pos.currentPrice }}</td>
+                    <td data-label="SL">
+                      @if (editingPositionId === pos.id) {
+                        <input type="number" class="inline-input" [(ngModel)]="editSL" step="0.00001" placeholder="SL" />
+                      } @else {
+                        {{ pos.stopLoss || '-' }}
+                      }
+                    </td>
+                    <td data-label="TP">
+                      @if (editingPositionId === pos.id) {
+                        <input type="number" class="inline-input" [(ngModel)]="editTP" step="0.00001" placeholder="TP" />
+                      } @else {
+                        {{ pos.takeProfit || '-' }}
+                      }
+                    </td>
+                    <td data-label="P&L" [class.positive]="pos.unrealizedPnL > 0" [class.negative]="pos.unrealizedPnL < 0">
+                      {{ pos.unrealizedPnL | currency }}
+                    </td>
+                    <td data-label="Actions" class="actions-cell">
+                      <div class="card-actions">
+                        @if (editingPositionId === pos.id) {
+                          <button class="success small" (click)="saveModify(pos.id)" [disabled]="modifying">
+                            {{ modifying ? '...' : 'Save' }}
+                          </button>
+                          <button class="small" (click)="cancelModify()">Cancel</button>
+                        } @else {
+                          <button class="small" (click)="startModify(pos)">Modify</button>
+                          <button class="danger small" (click)="closePosition(pos.id)">Close</button>
+                        }
+                      </div>
+                    </td>
+                  </tr>
+                }
+              </tbody>
+            </table>
+          </div>
         }
       </div>
 
@@ -322,36 +327,38 @@ interface OrderResult {
         @if (history.length === 0) {
           <p class="empty-state">No closed positions</p>
         } @else {
-          <table>
-            <thead>
-              <tr>
-                <th>Symbol</th>
-                <th>Direction</th>
-                <th>Volume (lots)</th>
-                <th>Notional</th>
-                <th>Entry</th>
-                <th>Exit</th>
-                <th>P&L</th>
-                <th>Closed At</th>
-              </tr>
-            </thead>
-            <tbody>
-              @for (pos of history; track pos.id) {
+          <div class="table-scroll">
+            <table>
+              <thead>
                 <tr>
-                  <td>{{ pos.symbol }}</td>
-                  <td>{{ pos.direction }}</td>
-                  <td>{{ pos.volume }}</td>
-                  <td>{{ pos.notionalUsd | currency }}</td>
-                  <td>{{ pos.entryPrice }}</td>
-                  <td>{{ pos.closePrice }}</td>
-                  <td [class.positive]="pos.realizedPnL > 0" [class.negative]="pos.realizedPnL < 0">
-                    {{ pos.realizedPnL | currency }}
-                  </td>
-                  <td>{{ pos.closeTime | date:'short' }}</td>
+                  <th>Symbol</th>
+                  <th>Direction</th>
+                  <th>Volume (lots)</th>
+                  <th>Notional</th>
+                  <th>Entry</th>
+                  <th>Exit</th>
+                  <th>P&L</th>
+                  <th>Closed At</th>
                 </tr>
-              }
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                @for (pos of history; track pos.id) {
+                  <tr>
+                    <td data-label="Symbol">{{ pos.symbol }}</td>
+                    <td data-label="Direction">{{ pos.direction }}</td>
+                    <td data-label="Volume">{{ pos.volume }}</td>
+                    <td data-label="Notional">{{ pos.notionalUsd | currency }}</td>
+                    <td data-label="Entry">{{ pos.entryPrice }}</td>
+                    <td data-label="Exit">{{ pos.closePrice }}</td>
+                    <td data-label="P&L" [class.positive]="pos.realizedPnL > 0" [class.negative]="pos.realizedPnL < 0">
+                      {{ pos.realizedPnL | currency }}
+                    </td>
+                    <td data-label="Closed At">{{ pos.closeTime | date:'short' }}</td>
+                  </tr>
+                }
+              </tbody>
+            </table>
+          </div>
         }
       </div>
     </div>
@@ -694,6 +701,68 @@ interface OrderResult {
       color: var(--text-muted);
       font-size: 13px;
     }
+
+    @media (max-width: 768px) {
+      .form-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .live-price-bar {
+        gap: 16px;
+      }
+
+      .submit-btn {
+        width: 100%;
+      }
+
+      .form-actions {
+        justify-content: stretch;
+      }
+
+      .confirm-buttons {
+        flex-direction: column;
+      }
+
+      .confirm-buttons button {
+        width: 100%;
+      }
+
+      .actions-cell {
+        display: block;
+      }
+
+      .inline-input {
+        width: 100%;
+        min-width: 0;
+      }
+    }
+
+    @media (max-width: 480px) {
+      .symbol-dropdown {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        top: auto;
+        max-height: 60vh;
+        margin-top: 0;
+        border-radius: 12px 12px 0 0;
+        z-index: 200;
+      }
+
+      .symbol-list {
+        max-height: 50vh;
+      }
+
+      .live-price-bar {
+        gap: 12px;
+        padding: 10px 12px;
+      }
+
+      .price-value {
+        font-size: 14px;
+      }
+    }
   `]
 })
 export class PositionsComponent implements OnInit, OnDestroy {
@@ -737,7 +806,8 @@ export class PositionsComponent implements OnInit, OnDestroy {
   constructor(
     private http: HttpClient,
     private signalR: SignalRService,
-    private elRef: ElementRef
+    private elRef: ElementRef,
+    private dialog: ConfirmDialogService
   ) {}
 
   ngOnInit() {
@@ -971,15 +1041,20 @@ export class PositionsComponent implements OnInit, OnDestroy {
     });
   }
 
-  closePosition(id: number) {
-    if (confirm('Are you sure you want to close this position?')) {
-      this.http.post(`${environment.apiUrl}/api/positions/${id}/close`, {}).subscribe({
-        next: () => {
-          this.loadPositions();
-          this.loadHistory();
-        }
-      });
-    }
+  async closePosition(id: number) {
+    const ok = await this.dialog.confirm({
+      title: 'Close Position',
+      message: 'Are you sure you want to close this position?',
+      confirmText: 'Close',
+      variant: 'danger'
+    });
+    if (!ok) return;
+    this.http.post(`${environment.apiUrl}/api/positions/${id}/close`, {}).subscribe({
+      next: () => {
+        this.loadPositions();
+        this.loadHistory();
+      }
+    });
   }
 
   startModify(pos: any) {
