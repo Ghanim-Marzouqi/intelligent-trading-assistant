@@ -13,6 +13,7 @@ public interface ICTraderPriceStream
     Task SubscribeAsync(string symbol);
     Task UnsubscribeAsync(string symbol);
     event EventHandler<PriceUpdateEventArgs>? OnPriceUpdate;
+    bool IsKnownSymbol(string symbol);
     (decimal Bid, decimal Ask)? GetCurrentPrice(string symbol);
     IReadOnlyList<decimal> GetPriceHistory(string symbol);
 }
@@ -129,16 +130,19 @@ public class CTraderPriceStream : ICTraderPriceStream
         _logger.LogDebug("Unsubscribed from spot prices for {Symbol}", symbol);
     }
 
+    // cTrader spot event prices are always encoded with 5-digit precision,
+    // regardless of the symbol's display Digits value.
+    private const int SpotPriceDigits = 5;
+
     private async Task HandleSpotEventAsync(ProtoOASpotEvent spotEvent)
     {
         var symbolName = _symbolResolver.GetSymbolName(spotEvent.SymbolId);
-        var digits = _symbolResolver.GetDigits(spotEvent.SymbolId);
 
         var bid = spotEvent.HasBid
-            ? CTraderConversions.PriceToDecimal(spotEvent.Bid, digits)
+            ? CTraderConversions.PriceToDecimal(spotEvent.Bid, SpotPriceDigits)
             : _lastPrices.GetValueOrDefault(symbolName);
         var ask = spotEvent.HasAsk
-            ? CTraderConversions.PriceToDecimal(spotEvent.Ask, digits)
+            ? CTraderConversions.PriceToDecimal(spotEvent.Ask, SpotPriceDigits)
             : bid;
 
         if (bid == 0) return;
@@ -166,6 +170,12 @@ public class CTraderPriceStream : ICTraderPriceStream
 
         // Raise event for internal consumers (Alert Engine, etc.)
         OnPriceUpdate?.Invoke(this, new PriceUpdateEventArgs(symbol, bid, ask));
+    }
+
+    public bool IsKnownSymbol(string symbol)
+    {
+        symbol = symbol.ToUpperInvariant();
+        return _symbolResolver.TryGetSymbolId(symbol, out _);
     }
 
     public (decimal Bid, decimal Ask)? GetCurrentPrice(string symbol)

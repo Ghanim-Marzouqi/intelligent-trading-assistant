@@ -252,6 +252,15 @@ public class OpenCodeZenService : IAiAnalysisService
         const int maxWaitMs = 10_000;
         const int pollIntervalMs = 250;
 
+        // Fail fast for unknown symbols instead of waiting 10s for nothing
+        if (!_priceStream.IsKnownSymbol(symbol))
+        {
+            _logger.LogWarning("Symbol {Symbol} is not recognized by the broker", symbol);
+            return new MarketDataContext(
+                $"[Symbol {symbol} is not recognized. Check the symbol name — common forex pairs use formats like EURUSD, USDJPY, GBPUSD.]",
+                0m, 0m);
+        }
+
         // Auto-subscribe so the price stream has data for this symbol
         var currentPrice = _priceStream.GetCurrentPrice(symbol);
         var wasAlreadySubscribed = currentPrice is not null;
