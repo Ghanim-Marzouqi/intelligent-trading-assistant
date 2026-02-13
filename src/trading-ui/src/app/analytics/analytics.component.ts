@@ -1,12 +1,14 @@
-import { Component, OnInit } from '@angular/core';
+import { Component, OnInit, ViewChild } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { HttpClient } from '@angular/common/http';
+import { BaseChartDirective } from 'ng2-charts';
+import { ChartConfiguration } from 'chart.js';
 import { environment } from '../../environments/environment';
 
 @Component({
   selector: 'app-analytics',
   standalone: true,
-  imports: [CommonModule],
+  imports: [CommonModule, BaseChartDirective],
   template: `
     <div class="analytics-page">
       <header class="page-header">
@@ -38,6 +40,19 @@ import { environment } from '../../environments/environment';
           <div class="stat-label">Largest Win</div>
           <div class="stat-value positive">{{ overview.largestWin | currency }}</div>
         </div>
+      </div>
+
+      <div class="card" style="margin-bottom: 20px;">
+        <h3>Equity Curve</h3>
+        @if (equityChartData.datasets[0].data.length) {
+          <canvas baseChart
+            [data]="equityChartData"
+            [options]="equityChartOptions"
+            type="line">
+          </canvas>
+        } @else {
+          <p class="empty-state">No equity data available</p>
+        }
       </div>
 
       <div class="grid-2">
@@ -73,29 +88,12 @@ import { environment } from '../../environments/environment';
 
         <div class="card">
           <h3>Performance by Day of Week</h3>
-          @if (dayOfWeekStats.length) {
-            <table>
-              <thead>
-                <tr>
-                  <th>Day</th>
-                  <th>Trades</th>
-                  <th>Win Rate</th>
-                  <th>P&L</th>
-                </tr>
-              </thead>
-              <tbody>
-                @for (day of dayOfWeekStats; track day.day) {
-                  <tr>
-                    <td>{{ day.day }}</td>
-                    <td>{{ day.trades }}</td>
-                    <td>{{ day.winRate | number:'1.0-0' }}%</td>
-                    <td [class.positive]="day.totalPnL > 0" [class.negative]="day.totalPnL < 0">
-                      {{ day.totalPnL | currency }}
-                    </td>
-                  </tr>
-                }
-              </tbody>
-            </table>
+          @if (dayChartData.labels?.length) {
+            <canvas baseChart
+              [data]="dayChartData"
+              [options]="barChartOptions"
+              type="bar">
+            </canvas>
           } @else {
             <p class="empty-state">No data available</p>
           }
@@ -104,20 +102,12 @@ import { environment } from '../../environments/environment';
 
       <div class="card" style="margin-top: 20px;">
         <h3>Performance by Hour</h3>
-        @if (hourlyStats.length) {
-          <div class="hour-chart">
-            @for (hour of hourlyStats; track hour.hour) {
-              <div class="hour-bar" [title]="hour.hour + ':00 - ' + (hour.totalPnL | currency)">
-                <div
-                  class="bar"
-                  [class.positive]="hour.totalPnL > 0"
-                  [class.negative]="hour.totalPnL < 0"
-                  [style.height.%]="getBarHeight(hour.totalPnL)"
-                ></div>
-                <span class="hour-label">{{ hour.hour }}</span>
-              </div>
-            }
-          </div>
+        @if (hourChartData.labels?.length) {
+          <canvas baseChart
+            [data]="hourChartData"
+            [options]="barChartOptions"
+            type="bar">
+          </canvas>
         } @else {
           <p class="empty-state">No data available</p>
         }
@@ -166,46 +156,6 @@ import { environment } from '../../environments/environment';
       color: var(--text-muted);
       padding: 40px;
     }
-
-    .hour-chart {
-      display: flex;
-      align-items: flex-end;
-      height: 200px;
-      gap: 4px;
-      padding-top: 20px;
-    }
-
-    .hour-bar {
-      flex: 1;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      height: 100%;
-      position: relative;
-    }
-
-    .bar {
-      width: 100%;
-      background: var(--surface-light);
-      border-radius: 2px 2px 0 0;
-      position: absolute;
-      bottom: 20px;
-
-      &.positive {
-        background: var(--success);
-      }
-
-      &.negative {
-        background: var(--danger);
-      }
-    }
-
-    .hour-label {
-      position: absolute;
-      bottom: 0;
-      font-size: 10px;
-      color: var(--text-muted);
-    }
   `]
 })
 export class AnalyticsComponent implements OnInit {
@@ -219,14 +169,97 @@ export class AnalyticsComponent implements OnInit {
     pairPerformance: []
   };
 
-  dayOfWeekStats: any[] = [];
-  hourlyStats: any[] = [];
-  maxPnL = 0;
+  private borderColor = '#333';
+  private textMuted = '#888';
+
+  equityChartData: ChartConfiguration<'line'>['data'] = {
+    labels: [],
+    datasets: [{
+      data: [],
+      borderColor: '#22c55e',
+      backgroundColor: 'rgba(34, 197, 94, 0.05)',
+      tension: 0.3,
+      fill: false,
+      pointRadius: 0,
+      borderWidth: 2
+    }]
+  };
+
+  equityChartOptions: ChartConfiguration<'line'>['options'] = {
+    responsive: true,
+    plugins: { legend: { display: false } },
+    scales: {
+      x: {
+        grid: { color: this.borderColor },
+        ticks: { color: this.textMuted, maxTicksLimit: 10 }
+      },
+      y: {
+        grid: { color: this.borderColor },
+        ticks: { color: this.textMuted }
+      }
+    }
+  };
+
+  dayChartData: ChartConfiguration<'bar'>['data'] = {
+    labels: [],
+    datasets: [{
+      data: [],
+      backgroundColor: [],
+      borderWidth: 0
+    }]
+  };
+
+  hourChartData: ChartConfiguration<'bar'>['data'] = {
+    labels: [],
+    datasets: [{
+      data: [],
+      backgroundColor: [],
+      borderWidth: 0
+    }]
+  };
+
+  barChartOptions: ChartConfiguration<'bar'>['options'] = {
+    responsive: true,
+    plugins: { legend: { display: false } },
+    scales: {
+      x: {
+        grid: { color: this.borderColor },
+        ticks: { color: this.textMuted }
+      },
+      y: {
+        grid: { color: this.borderColor },
+        ticks: { color: this.textMuted }
+      }
+    }
+  };
 
   constructor(private http: HttpClient) {}
 
   ngOnInit() {
+    if (typeof document !== 'undefined') {
+      const styles = getComputedStyle(document.documentElement);
+      this.borderColor = styles.getPropertyValue('--border').trim() || '#333';
+      this.textMuted = styles.getPropertyValue('--text-muted').trim() || '#888';
+      
+      // Update chart options colors
+      const eqScales = (this.equityChartOptions as any)?.scales;
+      if (eqScales) {
+        eqScales.x.grid.color = this.borderColor;
+        eqScales.x.ticks.color = this.textMuted;
+        eqScales.y.grid.color = this.borderColor;
+        eqScales.y.ticks.color = this.textMuted;
+      }
+      const barScales = (this.barChartOptions as any)?.scales;
+      if (barScales) {
+        barScales.x.grid.color = this.borderColor;
+        barScales.x.ticks.color = this.textMuted;
+        barScales.y.grid.color = this.borderColor;
+        barScales.y.ticks.color = this.textMuted;
+      }
+    }
+
     this.loadOverview();
+    this.loadEquityCurve();
     this.loadDayOfWeekStats();
     this.loadHourlyStats();
   }
@@ -237,22 +270,52 @@ export class AnalyticsComponent implements OnInit {
     });
   }
 
+  loadEquityCurve() {
+    this.http.get<any[]>(`${environment.apiUrl}/api/analytics/equity-curve`).subscribe({
+      next: (data) => {
+        this.equityChartData = {
+          labels: data.map(d => new Date(d.timestamp).toLocaleDateString()),
+          datasets: [{
+            data: data.map(d => d.equity),
+            borderColor: '#22c55e',
+            backgroundColor: 'rgba(34, 197, 94, 0.05)',
+            tension: 0.3,
+            fill: false,
+            pointRadius: 0,
+            borderWidth: 2
+          }]
+        };
+      }
+    });
+  }
+
   loadDayOfWeekStats() {
     this.http.get<any[]>(`${environment.apiUrl}/api/analytics/by-day-of-week`).subscribe({
-      next: (data) => this.dayOfWeekStats = data
+      next: (data) => {
+        this.dayChartData = {
+          labels: data.map(d => d.day),
+          datasets: [{
+            data: data.map(d => d.totalPnL),
+            backgroundColor: data.map(d => d.totalPnL >= 0 ? '#22c55e' : '#ef4444'),
+            borderWidth: 0
+          }]
+        };
+      }
     });
   }
 
   loadHourlyStats() {
     this.http.get<any[]>(`${environment.apiUrl}/api/analytics/by-hour`).subscribe({
       next: (data) => {
-        this.hourlyStats = data;
-        this.maxPnL = Math.max(...data.map(h => Math.abs(h.totalPnL)), 1);
+        this.hourChartData = {
+          labels: data.map(h => `${h.hour}:00`),
+          datasets: [{
+            data: data.map(h => h.totalPnL),
+            backgroundColor: data.map(h => h.totalPnL >= 0 ? '#22c55e' : '#ef4444'),
+            borderWidth: 0
+          }]
+        };
       }
     });
-  }
-
-  getBarHeight(pnL: number): number {
-    return Math.abs(pnL) / this.maxPnL * 80;
   }
 }

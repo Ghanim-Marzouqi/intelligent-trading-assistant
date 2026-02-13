@@ -1,7 +1,8 @@
-import { Injectable } from '@angular/core';
+import { Injectable, inject } from '@angular/core';
 import { BehaviorSubject } from 'rxjs';
 import * as signalR from '@microsoft/signalr';
 import { environment } from '../../../environments/environment';
+import { AuthService } from '../../auth/auth.service';
 
 export interface PriceUpdate {
   symbol: string;
@@ -42,6 +43,7 @@ export interface AccountUpdate {
 })
 export class SignalRService {
   private hubConnection: signalR.HubConnection | null = null;
+  private authService = inject(AuthService);
 
   private connectionStateSubject = new BehaviorSubject<boolean>(false);
   private priceUpdatesSubject = new BehaviorSubject<Map<string, PriceUpdate>>(new Map());
@@ -58,8 +60,18 @@ export class SignalRService {
   async connect(): Promise<void> {
     if (this.hubConnection) return;
 
+    const token = this.authService.getToken();
+    if (!token) {
+        console.error('SignalR cannot connect: No access token available');
+        return;
+    }
+
     this.hubConnection = new signalR.HubConnectionBuilder()
-      .withUrl(`${environment.apiUrl}/hub`)
+      .withUrl(`${environment.apiUrl}/hub`, {
+        accessTokenFactory: () => this.authService.getToken() || '',
+        skipNegotiation: true,
+        transport: signalR.HttpTransportType.WebSockets
+      })
       .withAutomaticReconnect()
       .build();
 

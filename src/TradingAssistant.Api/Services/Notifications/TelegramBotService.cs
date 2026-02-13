@@ -123,8 +123,12 @@ public class TelegramBotService : BackgroundService
             "/today" => await GetTodaySummaryAsync(),
             "/week" => await GetWeekSummaryAsync(),
             "/calendar" => await GetCalendarAsync(),
+            "/briefing" => await GetBriefingAsync(),
             "/help" => GetHelpText(),
             _ when text.StartsWith("/alert ") => await CreateQuickAlertAsync(text[7..]),
+            _ when text.StartsWith("/analyze ") => await AnalyzeSymbolAsync(text[9..].Trim()),
+            _ when text.StartsWith("/review ") => await ReviewTradeAsync(text[8..].Trim()),
+            _ when text.StartsWith("/news ") => await GetNewsAsync(text[6..].Trim()),
             _ => null
         };
 
@@ -548,6 +552,123 @@ public class TelegramBotService : BackgroundService
         }
     }
 
+    private async Task<string> AnalyzeSymbolAsync(string symbol)
+    {
+        try
+        {
+            symbol = symbol.ToUpperInvariant();
+            using var scope = _serviceProvider.CreateScope();
+            var aiService = scope.ServiceProvider.GetRequiredService<AI.IAiAnalysisService>();
+            var analysis = await aiService.AnalyzeMarketAsync(symbol);
+
+            return $"""
+                *AI Analysis: {analysis.Pair}*
+
+                Bias: {analysis.Bias} ({analysis.Confidence:P0})
+                Support: {analysis.KeyLevels.Support}
+                Resistance: {analysis.KeyLevels.Resistance}
+                Recommendation: {analysis.Recommendation}
+
+                _{analysis.Reasoning}_
+
+                {((analysis.RiskEvents?.Count ?? 0) > 0 ? "Risk Events: " + string.Join(", ", analysis.RiskEvents ?? Enumerable.Empty<string>()) : "")}
+                """;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error analyzing {Symbol}", symbol);
+            return $"_Error analyzing {symbol}_";
+        }
+    }
+
+    private async Task<string> GetBriefingAsync()
+    {
+        try
+        {
+            using var scope = _serviceProvider.CreateScope();
+            var aiService = scope.ServiceProvider.GetRequiredService<AI.IAiAnalysisService>();
+
+            var watchlist = new[] { "EURUSD", "GBPUSD", "USDJPY", "XAUUSD" };
+            var briefing = await aiService.GenerateDailyBriefingAsync(watchlist);
+
+            return $"*Daily Briefing*\n\n{briefing}";
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error generating briefing");
+            return "_Error generating daily briefing_";
+        }
+    }
+
+    private async Task<string> ReviewTradeAsync(string tradeIdStr)
+    {
+        try
+        {
+            if (!long.TryParse(tradeIdStr, out var tradeId))
+                return "_Invalid trade ID. Usage:_ `/review 123`";
+
+            using var scope = _serviceProvider.CreateScope();
+            var aiService = scope.ServiceProvider.GetRequiredService<AI.IAiAnalysisService>();
+            var review = await aiService.ReviewTradeAsync(tradeId);
+
+            var strengths = (review.Strengths?.Count ?? 0) > 0
+                ? string.Join("\n", review.Strengths!.Select(s => $"  + {s}"))
+                : "  None identified";
+            var weaknesses = (review.Weaknesses?.Count ?? 0) > 0
+                ? string.Join("\n", review.Weaknesses!.Select(w => $"  - {w}"))
+                : "  None identified";
+
+            return $"""
+                *Trade Review #{review.TradeId}*
+                Score: {review.Score}/10
+
+                {review.Assessment}
+
+                *Strengths:*
+                {strengths}
+
+                *Weaknesses:*
+                {weaknesses}
+                """;
+        }
+        catch (InvalidOperationException ex)
+        {
+            return $"_Trade not found: {ex.Message}_";
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error reviewing trade {TradeId}", tradeIdStr);
+            return "_Error reviewing trade_";
+        }
+    }
+
+    private async Task<string> GetNewsAsync(string symbol)
+    {
+        try
+        {
+            symbol = symbol.ToUpperInvariant();
+            using var scope = _serviceProvider.CreateScope();
+            var aiService = scope.ServiceProvider.GetRequiredService<AI.IAiAnalysisService>();
+            var sentiment = await aiService.AnalyzeNewsAsync(symbol);
+
+            var sb = new StringBuilder($"*News Sentiment: {sentiment.Symbol}*\n");
+            sb.AppendLine($"Overall: {sentiment.OverallSentiment} ({sentiment.SentimentScore:+0.0;-0.0;0.0})");
+            sb.AppendLine();
+
+            foreach (var news in sentiment.RelevantNews?.Take(5) ?? Enumerable.Empty<dynamic>())
+            {
+                sb.AppendLine($"• _{news.Title}_ ({news.Sentiment})");
+            }
+
+            return sb.ToString();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error analyzing news for {Symbol}", symbol);
+            return $"_Error analyzing news for {symbol}_";
+        }
+    }
+
     private string GetHelpText() => """
         *Available Commands*
 
@@ -558,6 +679,10 @@ public class TelegramBotService : BackgroundService
         /today - Today's trading summary
         /week - This week's summary
         /calendar - Economic events
+        /analyze EURUSD - AI market analysis
+        /briefing - Daily market briefing
+        /review 123 - AI trade review
+        /news EURUSD - News sentiment analysis
         /help - Show this help
         """;
 }

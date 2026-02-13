@@ -1,5 +1,7 @@
 import { Component, OnInit, OnDestroy } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { HttpClient } from '@angular/common/http';
+import { environment } from '../../environments/environment';
 import { SignalRService } from '../shared/services/signalr.service';
 
 @Component({
@@ -177,18 +179,23 @@ export class DashboardComponent implements OnInit, OnDestroy {
   isConnected = false;
 
   account = {
-    balance: 10000,
-    equity: 10150,
-    unrealizedPnL: 150,
-    freeMargin: 9650
+    balance: 0,
+    equity: 0,
+    unrealizedPnL: 0,
+    freeMargin: 0
   };
 
   positions: any[] = [];
   alerts: any[] = [];
 
-  constructor(private signalR: SignalRService) {}
+  constructor(private signalR: SignalRService, private http: HttpClient) {}
 
   ngOnInit() {
+    // Load initial data via HTTP
+    this.loadAccount();
+    this.loadPositions();
+
+    // Connect SignalR for real-time updates
     this.signalR.connect();
 
     this.signalR.connectionState$.subscribe(connected => {
@@ -196,7 +203,9 @@ export class DashboardComponent implements OnInit, OnDestroy {
     });
 
     this.signalR.positions$.subscribe(positions => {
-      this.positions = positions;
+      if (positions.length > 0) {
+        this.positions = positions;
+      }
     });
 
     this.signalR.alerts$.subscribe(alerts => {
@@ -206,6 +215,30 @@ export class DashboardComponent implements OnInit, OnDestroy {
     this.signalR.accountUpdates$.subscribe(update => {
       if (update) {
         this.account = update;
+      }
+    });
+  }
+
+  loadAccount() {
+    this.http.get<any>(`${environment.apiUrl}/api/positions/account`).subscribe({
+      next: (data) => {
+        this.account = data;
+      }
+    });
+  }
+
+  loadPositions() {
+    this.http.get<any[]>(`${environment.apiUrl}/api/positions`).subscribe({
+      next: (data) => {
+        this.positions = data.map(p => ({
+          positionId: p.id,
+          symbol: p.symbol,
+          direction: p.direction,
+          volume: p.volume,
+          entryPrice: p.entryPrice,
+          currentPrice: p.currentPrice,
+          pnL: p.unrealizedPnL
+        }));
       }
     });
   }

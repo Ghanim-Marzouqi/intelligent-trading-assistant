@@ -1,5 +1,6 @@
-import { Component } from '@angular/core';
+import { Component, inject } from '@angular/core';
 import { RouterOutlet, RouterLink, RouterLinkActive } from '@angular/router';
+import { AuthService } from './auth/auth.service';
 
 @Component({
   selector: 'app-root',
@@ -38,7 +39,17 @@ import { RouterOutlet, RouterLink, RouterLinkActive } from '@angular/router';
               <span class="icon">📈</span> Analytics
             </a>
           </li>
+          <li>
+            <a routerLink="/ai" routerLinkActive="active">
+              <span class="icon">🤖</span> AI Analysis
+            </a>
+          </li>
         </ul>
+        <div class="sidebar-footer">
+          <button class="logout-btn" (click)="logout()">
+            <span class="icon">🚪</span> Logout
+          </button>
+        </div>
       </nav>
       <main class="main-content">
         <router-outlet></router-outlet>
@@ -81,6 +92,7 @@ import { RouterOutlet, RouterLink, RouterLinkActive } from '@angular/router';
     .nav-links {
       list-style: none;
       padding: 0;
+      flex: 1;
     }
 
     .nav-links a {
@@ -111,6 +123,36 @@ import { RouterOutlet, RouterLink, RouterLinkActive } from '@angular/router';
       padding: 24px;
       overflow-y: auto;
     }
+
+    .sidebar-footer {
+      border-top: 1px solid var(--border);
+      padding-top: 12px;
+    }
+
+    .logout-btn {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 20px;
+      width: 100%;
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      font-size: 14px;
+      cursor: pointer;
+      transition: all 0.2s;
+
+      &:hover {
+        background: var(--surface-light);
+        color: var(--danger);
+      }
+    }
   `]
 })
-export class AppComponent {}
+export class AppComponent {
+  private authService = inject(AuthService);
+
+  logout() {
+    this.authService.logout();
+  }
+}

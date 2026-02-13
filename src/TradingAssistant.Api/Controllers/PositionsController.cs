@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using TradingAssistant.Api.Data;
@@ -8,6 +9,7 @@ namespace TradingAssistant.Api.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
+[Authorize]
 public class PositionsController : ControllerBase
 {
     private readonly AppDbContext _db;
@@ -107,6 +109,30 @@ public class PositionsController : ControllerBase
         return NoContent();
     }
 
+    [HttpGet("account")]
+    public async Task<ActionResult<AccountInfo>> GetAccount()
+    {
+        var account = await _db.Accounts
+            .Where(a => a.IsActive)
+            .FirstOrDefaultAsync();
+
+        if (account is null)
+            return NotFound(new { error = "No active account" });
+
+        var openPositions = await _db.Positions
+            .Where(p => p.Status == PositionStatus.Open)
+            .ToListAsync();
+
+        var unrealizedPnL = openPositions.Sum(p => p.UnrealizedPnL);
+
+        return new AccountInfo(
+            Balance: account.Balance,
+            Equity: account.Equity,
+            UnrealizedPnL: unrealizedPnL,
+            FreeMargin: account.Equity - openPositions.Sum(p => p.Volume * 1000m) // Simplified margin
+        );
+    }
+
     [HttpGet("summary")]
     public async Task<ActionResult<PositionSummary>> GetPositionSummary()
     {
@@ -127,3 +153,4 @@ public class PositionsController : ControllerBase
 
 public record ModifyPositionRequest(decimal? StopLoss, decimal? TakeProfit);
 public record PositionSummary(int TotalPositions, decimal TotalVolume, decimal UnrealizedPnL, Dictionary<string, decimal> BySymbol);
+public record AccountInfo(decimal Balance, decimal Equity, decimal UnrealizedPnL, decimal FreeMargin);

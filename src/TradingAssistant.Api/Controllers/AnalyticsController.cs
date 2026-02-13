@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using TradingAssistant.Api.Data;
@@ -6,6 +7,7 @@ namespace TradingAssistant.Api.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
+[Authorize]
 public class AnalyticsController : ControllerBase
 {
     private readonly AppDbContext _db;

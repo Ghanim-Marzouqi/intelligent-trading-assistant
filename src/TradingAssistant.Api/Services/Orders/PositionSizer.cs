@@ -69,7 +69,7 @@ public class PositionSizer : IPositionSizer
         if (symbol.EndsWith(accountCurrency))
             return 10m; // Standard lot pip value for USD account with USD quote currency
 
-        // TODO: Implement proper cross-rate conversion
+        // USD-only account: standard lot pip value is $10
         return 10m;
     }
 

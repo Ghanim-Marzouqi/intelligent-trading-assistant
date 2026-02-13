@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.SignalR;
 
 namespace TradingAssistant.Api.Hubs;
@@ -11,6 +12,7 @@ public interface ITradingHubClient
     Task ReceiveTradeExecuted(TradeNotification trade);
 }
 
+[Authorize]
 public class TradingHub : Hub<ITradingHubClient>
 {
     private readonly ILogger<TradingHub> _logger;

@@ -5,6 +5,10 @@ namespace TradingAssistant.Api.Services.Alerts.Conditions;
 public interface IConditionEvaluator
 {
     bool Evaluate(AlertCondition condition, decimal currentPrice, decimal? previousPrice = null);
+
+    bool EvaluateWithHistory(AlertCondition condition, IReadOnlyList<decimal> priceHistory,
+        decimal currentPrice, decimal? previousPrice = null)
+        => Evaluate(condition, currentPrice, previousPrice);
 }
 
 public class PriceCondition : IConditionEvaluator

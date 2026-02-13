@@ -161,3 +161,6 @@ Private project. All rights reserved.
 ---
 
 > **Disclaimer:** This system is a trading assistant tool, not a fully autonomous trading bot. All trade execution requires human approval. Trading forex and CFDs carries significant risk. Only trade with money you can afford to lose.
+
+### Configuration
+See [README_SECURITY.md](README_SECURITY.md) for security configuration instructions.

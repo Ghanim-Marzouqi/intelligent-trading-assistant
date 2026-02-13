@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using Microsoft.EntityFrameworkCore;
 using TradingAssistant.Api.Data;
 using TradingAssistant.Api.Models.Alerts;
+using TradingAssistant.Api.Services.Alerts.Conditions;
 using TradingAssistant.Api.Services.CTrader;
 using TradingAssistant.Api.Services.Notifications;
 
@@ -14,6 +15,13 @@ public class AlertEngine : BackgroundService
     private readonly INotificationService _notificationService;
     private readonly ILogger<AlertEngine> _logger;
     private readonly ConcurrentDictionary<string, List<AlertRule>> _rulesBySymbol = new();
+    private readonly ConcurrentDictionary<string, decimal> _previousPrices = new();
+    private readonly ConcurrentDictionary<string, List<decimal>> _priceHistory = new();
+
+    private const int MaxPriceHistory = 100;
+
+    private readonly PriceCondition _priceCondition = new();
+    private readonly IndicatorCondition _indicatorCondition = new();
 
     public AlertEngine(
         IServiceProvider serviceProvider,
@@ -105,23 +113,48 @@ public class AlertEngine : BackgroundService
 
     private async Task OnPriceUpdateAsync(string symbol, decimal price)
     {
+        // Track price history
+        var history = _priceHistory.GetOrAdd(symbol, _ => new List<decimal>());
+        lock (history)
+        {
+            history.Add(price);
+            if (history.Count > MaxPriceHistory)
+                history.RemoveAt(0);
+        }
+
+        // Get previous price for crossover detection
+        var hasPrevious = _previousPrices.TryGetValue(symbol, out var previousPrice);
+
         if (!_rulesBySymbol.TryGetValue(symbol, out var rules))
+        {
+            _previousPrices[symbol] = price;
             return;
+        }
 
         foreach (var rule in rules.ToList())
         {
-            if (await EvaluateRuleAsync(rule, price))
+            if (await EvaluateRuleAsync(rule, price, hasPrevious ? previousPrice : null, history))
             {
                 await TriggerAlertAsync(rule, price);
             }
         }
+
+        _previousPrices[symbol] = price;
     }
 
-    private async Task<bool> EvaluateRuleAsync(AlertRule rule, decimal price)
+    private async Task<bool> EvaluateRuleAsync(AlertRule rule, decimal price, decimal? previousPrice,
+        List<decimal> priceHistory)
     {
         foreach (var condition in rule.Conditions)
         {
-            var result = EvaluateCondition(condition, price);
+            bool result;
+            IReadOnlyList<decimal> historySnapshot;
+            lock (priceHistory)
+            {
+                historySnapshot = priceHistory.ToList();
+            }
+
+            result = EvaluateCondition(condition, price, previousPrice, historySnapshot);
 
             if (condition.CombineWith == LogicalOperator.Or && result)
                 return true;
@@ -136,15 +169,17 @@ public class AlertEngine : BackgroundService
         return false;
     }
 
-    private bool EvaluateCondition(AlertCondition condition, decimal price)
+    private bool EvaluateCondition(AlertCondition condition, decimal price, decimal? previousPrice,
+        IReadOnlyList<decimal> priceHistory)
     {
-        return condition.Operator switch
+        return condition.Type switch
         {
-            ComparisonOperator.GreaterThan => price > condition.Value,
-            ComparisonOperator.LessThan => price < condition.Value,
-            ComparisonOperator.GreaterOrEqual => price >= condition.Value,
-            ComparisonOperator.LessOrEqual => price <= condition.Value,
-            // TODO: Implement crossover detection (requires previous price)
+            ConditionType.PriceLevel or ConditionType.PriceChange
+                => _priceCondition.Evaluate(condition, price, previousPrice),
+
+            ConditionType.IndicatorValue or ConditionType.IndicatorCrossover
+                => _indicatorCondition.EvaluateWithHistory(condition, priceHistory, price, previousPrice),
+
             _ => false
         };
     }
@@ -185,6 +220,30 @@ public class AlertEngine : BackgroundService
 
             // Send notifications
             await _notificationService.SendAlertAsync(trigger);
+
+            // Fire-and-forget AI enrichment
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    using var scope = _serviceProvider.CreateScope();
+                    var aiService = scope.ServiceProvider.GetRequiredService<AI.IAiAnalysisService>();
+                    var enrichDb = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+                    var enrichment = await aiService.EnrichAlertAsync(rule.Symbol, triggerPrice, trigger.Message);
+
+                    var savedTrigger = await enrichDb.AlertTriggers.FindAsync(trigger.Id);
+                    if (savedTrigger is not null)
+                    {
+                        savedTrigger.AiEnrichment = enrichment;
+                        await enrichDb.SaveChangesAsync();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "AI enrichment failed for alert {AlertName}", rule.Name);
+                }
+            });
         }
         catch (Exception ex)
         {

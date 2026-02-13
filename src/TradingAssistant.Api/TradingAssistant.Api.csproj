@@ -8,6 +8,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="TradingAssistant.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- Entity Framework Core (.NET 10) -->
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.0" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.3">
@@ -35,6 +39,9 @@
 
     <!-- SignalR Client (.NET 10) -->
     <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="10.0.3" />
+
+    <!-- JWT Authentication -->
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.3" />
 
     <!-- Health Checks -->
     <PackageReference Include="AspNetCore.HealthChecks.NpgSql" Version="9.0.0" />

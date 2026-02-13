@@ -1,24 +1,64 @@
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
+using System.Security.Cryptography;
+using System.Text;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.IdentityModel.Tokens;
 using TradingAssistant.Api.Services.CTrader;
+using Microsoft.Extensions.Hosting;
 
 namespace TradingAssistant.Api.Controllers;
 
 [ApiController]
 [Route("api/auth")]
+[AllowAnonymous]
 public class AuthController : ControllerBase
 {
     private readonly ICTraderAuthService _authService;
     private readonly IConfiguration _config;
     private readonly ILogger<AuthController> _logger;
+    private readonly IHostEnvironment _env;
 
     public AuthController(
         ICTraderAuthService authService,
         IConfiguration config,
-        ILogger<AuthController> logger)
+        ILogger<AuthController> logger,
+        IHostEnvironment env)
     {
         _authService = authService;
         _config = config;
         _logger = logger;
+        _env = env;
+    }
+
+    [HttpPost("login")]
+    public IActionResult Login([FromBody] LoginRequest request)
+    {
+        var configuredPassword = _config["Auth:Password"] ?? "";
+
+        // If no password is configured, check environment
+        if (string.IsNullOrEmpty(configuredPassword))
+        {
+            if (_env.IsDevelopment())
+            {
+                _logger.LogWarning("No Auth:Password configured, allowing login without password (Development only)");
+            }
+            else
+            {
+                _logger.LogCritical("No Auth:Password configured. Denying access in non-development environment.");
+                return Unauthorized(new { error = "Server misconfiguration" });
+            }
+        }
+        else if (!CryptographicOperations.FixedTimeEquals(
+                     Encoding.UTF8.GetBytes(request.Password ?? ""),
+                     Encoding.UTF8.GetBytes(configuredPassword)))
+        {
+            return Unauthorized(new { error = "Invalid password" });
+        }
+
+        var token = GenerateJwtToken();
+        return Ok(new { token });
     }
 
     [HttpGet("ctrader")]
@@ -62,4 +102,31 @@ public class AuthController : ControllerBase
             authUrl = Url.Action(nameof(RedirectToCTrader))
         });
     }
+
+    private string GenerateJwtToken()
+    {
+        var secret = _config["Jwt:Secret"]
+            ?? throw new InvalidOperationException("Jwt:Secret configuration is required");
+        var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secret));
+        var credentials = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
+        var expiryHours = _config.GetValue<int>("Jwt:ExpiryHours", 24);
+
+        var claims = new[]
+        {
+            new Claim(ClaimTypes.Name, "trader"),
+            new Claim(ClaimTypes.Role, "admin"),
+            new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString())
+        };
+
+        var token = new JwtSecurityToken(
+            issuer: _config["Jwt:Issuer"] ?? "TradingAssistant",
+            audience: _config["Jwt:Audience"] ?? "TradingAssistantUI",
+            claims: claims,
+            expires: DateTime.UtcNow.AddHours(expiryHours),
+            signingCredentials: credentials);
+
+        return new JwtSecurityTokenHandler().WriteToken(token);
+    }
 }
+
+public record LoginRequest(string? Password);
