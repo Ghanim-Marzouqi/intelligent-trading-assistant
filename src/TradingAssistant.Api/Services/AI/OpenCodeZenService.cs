@@ -259,7 +259,11 @@ public class OpenCodeZenService : IAiAnalysisService
         {
             var result = JsonSerializer.Deserialize<OpenAiResponse>(responseBody,
                 new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-            return result?.Choices?.FirstOrDefault()?.Message?.Content ?? responseBody;
+            var message = result?.Choices?.FirstOrDefault()?.Message;
+            // Thinking models put output in content, reasoning in reasoning_content
+            return !string.IsNullOrEmpty(message?.Content) ? message.Content
+                 : !string.IsNullOrEmpty(message?.ReasoningContent) ? message.ReasoningContent
+                 : responseBody;
         }
         catch (JsonException)
         {
@@ -283,4 +287,5 @@ internal class Choice
 internal class Message
 {
     public string? Content { get; set; }
+    public string? ReasoningContent { get; set; }
 }
