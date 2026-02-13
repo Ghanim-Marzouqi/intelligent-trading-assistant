@@ -17,20 +17,22 @@ public class OrderManager : IOrderManager
     private readonly IPositionSizer _positionSizer;
     private readonly IRiskGuard _riskGuard;
     private readonly INotificationService _notifications;
+    private readonly IApprovalTokenStore _approvalStore;
     private readonly ILogger<OrderManager> _logger;
-    private readonly Dictionary<string, PreparedOrder> _pendingApprovals = new();
 
     public OrderManager(
         ICTraderOrderExecutor executor,
         IPositionSizer positionSizer,
         IRiskGuard riskGuard,
         INotificationService notifications,
+        IApprovalTokenStore approvalStore,
         ILogger<OrderManager> logger)
     {
         _executor = executor;
         _positionSizer = positionSizer;
         _riskGuard = riskGuard;
         _notifications = notifications;
+        _approvalStore = approvalStore;
         _logger = logger;
     }
 
@@ -66,7 +68,7 @@ public class OrderManager : IOrderManager
             ExpiresAt = DateTime.UtcNow.AddMinutes(5)
         };
 
-        _pendingApprovals[order.ApprovalToken] = order;
+        _approvalStore.Store(order.ApprovalToken, order);
 
         // Send approval request to Telegram
         await _notifications.SendOrderApprovalRequestAsync(order);
@@ -89,7 +91,7 @@ public class OrderManager : IOrderManager
 
     public async Task<bool> ApproveOrderAsync(string approvalToken)
     {
-        if (!_pendingApprovals.TryGetValue(approvalToken, out var order))
+        if (!_approvalStore.TryRemove(approvalToken, out var order) || order is null)
         {
             _logger.LogWarning("Approval token not found: {Token}", approvalToken);
             return false;
@@ -98,11 +100,8 @@ public class OrderManager : IOrderManager
         if (DateTime.UtcNow > order.ExpiresAt)
         {
             _logger.LogWarning("Order approval expired: {Token}", approvalToken);
-            _pendingApprovals.Remove(approvalToken);
             return false;
         }
-
-        _pendingApprovals.Remove(approvalToken);
 
         var result = await ExecuteOrderAsync(order);
 
@@ -122,7 +121,7 @@ public class OrderManager : IOrderManager
 
     public Task RejectOrderAsync(string approvalToken)
     {
-        if (_pendingApprovals.Remove(approvalToken))
+        if (_approvalStore.TryRemove(approvalToken, out _))
         {
             _logger.LogInformation("Order rejected: {Token}", approvalToken);
         }

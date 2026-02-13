@@ -64,6 +64,14 @@ import { AuthService } from './auth/auth.service';
               AI Analysis
             </a>
           </li>
+          <li>
+            <a routerLink="/watchlist" routerLinkActive="active">
+              <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>
+              </svg>
+              Watchlist
+            </a>
+          </li>
         </ul>
         <div class="sidebar-footer">
           <button class="logout-btn" (click)="logout()">

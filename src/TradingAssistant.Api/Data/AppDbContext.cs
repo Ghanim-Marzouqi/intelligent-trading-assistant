@@ -17,6 +17,7 @@ public class AppDbContext : DbContext
     public DbSet<Symbol> Symbols => Set<Symbol>();
     public DbSet<Account> Accounts => Set<Account>();
     public DbSet<CTraderToken> CTraderTokens => Set<CTraderToken>();
+    public DbSet<WatchlistSymbol> WatchlistSymbols => Set<WatchlistSymbol>();
 
     // Alerts schema
     public DbSet<AlertRule> AlertRules => Set<AlertRule>();
@@ -32,6 +33,8 @@ public class AppDbContext : DbContext
     public DbSet<DailyStats> DailyStats => Set<DailyStats>();
     public DbSet<PairStats> PairStats => Set<PairStats>();
     public DbSet<EquitySnapshot> EquitySnapshots => Set<EquitySnapshot>();
+    public DbSet<AnalysisSnapshot> AnalysisSnapshots => Set<AnalysisSnapshot>();
+    public DbSet<AnalysisSettings> AnalysisSettings => Set<AnalysisSettings>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -44,6 +47,7 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<Symbol>().ToTable("symbols", "trading");
         modelBuilder.Entity<Account>().ToTable("accounts", "trading");
         modelBuilder.Entity<CTraderToken>().ToTable("ctrader_tokens", "trading");
+        modelBuilder.Entity<WatchlistSymbol>().ToTable("watchlist_symbols", "trading");
 
         modelBuilder.Entity<AlertRule>().ToTable("alert_rules", "alerts");
         modelBuilder.Entity<AlertTrigger>().ToTable("alert_triggers", "alerts");
@@ -56,6 +60,8 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<DailyStats>().ToTable("daily_stats", "analytics");
         modelBuilder.Entity<PairStats>().ToTable("pair_stats", "analytics");
         modelBuilder.Entity<EquitySnapshot>().ToTable("equity_snapshots", "analytics");
+        modelBuilder.Entity<AnalysisSnapshot>().ToTable("analysis_snapshots", "analytics");
+        modelBuilder.Entity<AnalysisSettings>().ToTable("analysis_settings", "analytics");
 
         // Configure indexes for frequently queried columns
         modelBuilder.Entity<Position>()
@@ -74,5 +80,12 @@ public class AppDbContext : DbContext
             .HasIndex(s => s.CTraderSymbolId)
             .IsUnique()
             .HasFilter("\"CTraderSymbolId\" > 0");
+
+        modelBuilder.Entity<WatchlistSymbol>()
+            .HasIndex(w => w.Symbol)
+            .IsUnique();
+
+        modelBuilder.Entity<AnalysisSnapshot>()
+            .HasIndex(a => new { a.Symbol, a.CreatedAt });
     }
 }

@@ -8,6 +8,7 @@ using Moq;
 using TradingAssistant.Api.Data;
 using TradingAssistant.Api.Services.AI;
 using TradingAssistant.Api.Services.CTrader;
+using TradingAssistant.Api.Services.Orders;
 
 namespace TradingAssistant.Tests.AI;
 
@@ -15,6 +16,7 @@ public class OpenCodeZenServiceTests
 {
     private readonly Mock<ICTraderPriceStream> _priceStream = new();
     private readonly Mock<ICTraderHistoricalData> _historicalData = new();
+    private readonly Mock<IPositionSizer> _positionSizer = new();
     private readonly AppDbContext _db;
     private readonly IConfiguration _config;
 
@@ -46,7 +48,8 @@ public class OpenCodeZenServiceTests
             _db,
             NullLogger<OpenCodeZenService>.Instance,
             _priceStream.Object,
-            _historicalData.Object);
+            _historicalData.Object,
+            _positionSizer.Object);
     }
 
     private static HttpClient CreateMockHttpClient(string responseJson, HttpStatusCode statusCode = HttpStatusCode.OK)
@@ -289,7 +292,8 @@ public class OpenCodeZenServiceTests
             httpClient, noKeyConfig, _db,
             NullLogger<OpenCodeZenService>.Instance,
             _priceStream.Object,
-            _historicalData.Object);
+            _historicalData.Object,
+            _positionSizer.Object);
 
         await Assert.ThrowsAsync<InvalidOperationException>(
             () => service.AnalyzeMarketAsync("EURUSD"));

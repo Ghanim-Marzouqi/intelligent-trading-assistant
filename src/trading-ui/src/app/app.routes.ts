@@ -36,5 +36,10 @@ export const routes: Routes = [
     path: 'ai',
     loadComponent: () => import('./ai-analysis/ai-analysis.component').then(m => m.AiAnalysisComponent),
     canActivate: [authGuard]
+  },
+  {
+    path: 'watchlist',
+    loadComponent: () => import('./watchlist/watchlist.component').then(m => m.WatchlistComponent),
+    canActivate: [authGuard]
   }
 ];

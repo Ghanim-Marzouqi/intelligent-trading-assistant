@@ -179,12 +179,16 @@ builder.Services.AddScoped<ITradeEnricher, TradeEnricher>();
 builder.Services.AddScoped<IAnalyticsAggregator, AnalyticsAggregator>();
 
 // Order Services
+builder.Services.AddSingleton<IApprovalTokenStore, ApprovalTokenStore>();
 builder.Services.AddScoped<IOrderManager, OrderManager>();
 builder.Services.AddScoped<IPositionSizer, PositionSizer>();
 builder.Services.AddScoped<IRiskGuard, RiskGuard>();
 
 // AI Services
 builder.Services.AddHttpClient<IAiAnalysisService, OpenCodeZenService>();
+
+// Scheduled Analysis
+builder.Services.AddHostedService<TradingAssistant.Api.Services.Analysis.ScheduledAnalysisService>();
 
 // Notification Services
 builder.Services.AddSingleton<INotificationService, NotificationService>();

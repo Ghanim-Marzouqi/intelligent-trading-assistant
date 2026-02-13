@@ -36,6 +36,8 @@ public class TradeSuggestion
     public decimal PipsToTarget { get; set; }
     public decimal RiskAmount { get; set; }
     public decimal PotentialReward { get; set; }
+    public decimal MarginRequired { get; set; }
+    public string? LeverageWarning { get; set; }
     public string Rationale { get; set; } = string.Empty;
 }
 

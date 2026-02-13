@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using TradingAssistant.Api.Data;
@@ -11,9 +12,11 @@ using TradingAssistant.Api.Data;
 namespace TradingAssistant.Api.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260213180519_AddAlertRuleAutoPrepareOrder")]
+    partial class AddAlertRuleAutoPrepareOrder
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -172,100 +175,6 @@ namespace TradingAssistant.Api.Migrations
                     b.HasIndex("AlertRuleId");
 
                     b.ToTable("alert_triggers", "alerts");
-                });
-
-            modelBuilder.Entity("TradingAssistant.Api.Models.Analytics.AnalysisSettings", b =>
-                {
-                    b.Property<long>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("bigint");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
-
-                    b.Property<int>("AutoPrepareMinConfidence")
-                        .HasColumnType("integer");
-
-                    b.Property<string>("ScheduleUtcHoursJson")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<DateTime>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.HasKey("Id");
-
-                    b.ToTable("analysis_settings", "analytics");
-                });
-
-            modelBuilder.Entity("TradingAssistant.Api.Models.Analytics.AnalysisSnapshot", b =>
-                {
-                    b.Property<long>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("bigint");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
-
-                    b.Property<string>("Bias")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<decimal>("Confidence")
-                        .HasColumnType("numeric");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("LeverageWarning")
-                        .HasColumnType("text");
-
-                    b.Property<decimal?>("MarginRequired")
-                        .HasColumnType("numeric");
-
-                    b.Property<string>("Reasoning")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("Recommendation")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<decimal>("Resistance")
-                        .HasColumnType("numeric");
-
-                    b.Property<string>("Source")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<decimal>("Support")
-                        .HasColumnType("numeric");
-
-                    b.Property<string>("Symbol")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("TradeDirection")
-                        .HasColumnType("text");
-
-                    b.Property<decimal?>("TradeEntry")
-                        .HasColumnType("numeric");
-
-                    b.Property<decimal?>("TradeLotSize")
-                        .HasColumnType("numeric");
-
-                    b.Property<decimal?>("TradeRiskReward")
-                        .HasColumnType("numeric");
-
-                    b.Property<decimal?>("TradeStopLoss")
-                        .HasColumnType("numeric");
-
-                    b.Property<decimal?>("TradeTakeProfit")
-                        .HasColumnType("numeric");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("Symbol", "CreatedAt");
-
-                    b.ToTable("analysis_snapshots", "analytics");
                 });
 
             modelBuilder.Entity("TradingAssistant.Api.Models.Analytics.DailyStats", b =>
@@ -917,29 +826,6 @@ namespace TradingAssistant.Api.Migrations
                         .HasFilter("\"CTraderSymbolId\" > 0");
 
                     b.ToTable("symbols", "trading");
-                });
-
-            modelBuilder.Entity("TradingAssistant.Api.Models.Trading.WatchlistSymbol", b =>
-                {
-                    b.Property<long>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("bigint");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
-
-                    b.Property<DateTime>("AddedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("Symbol")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("Symbol")
-                        .IsUnique();
-
-                    b.ToTable("watchlist_symbols", "trading");
                 });
 
             modelBuilder.Entity("TradingAssistant.Api.Models.Alerts.AlertCondition", b =>

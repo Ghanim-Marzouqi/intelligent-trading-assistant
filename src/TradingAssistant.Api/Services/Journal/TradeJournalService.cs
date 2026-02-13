@@ -39,6 +39,7 @@ public class TradeJournalService : ITradeJournalService
         var entry = new TradeEntry
         {
             PositionId = positionEvent.PositionId,
+            AccountId = positionEvent.AccountId,
             Symbol = positionEvent.Symbol,
             Direction = positionEvent.Direction,
             Volume = positionEvent.Volume,
@@ -47,6 +48,9 @@ public class TradeJournalService : ITradeJournalService
             StopLoss = positionEvent.StopLoss,
             TakeProfit = positionEvent.TakeProfit,
             PnL = positionEvent.PnL,
+            Commission = positionEvent.Commission,
+            Swap = positionEvent.Swap,
+            OpenTime = positionEvent.OpenTime,
             CloseTime = DateTime.UtcNow,
             CreatedAt = DateTime.UtcNow
         };

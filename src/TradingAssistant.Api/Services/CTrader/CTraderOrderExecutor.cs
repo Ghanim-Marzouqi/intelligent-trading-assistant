@@ -95,13 +95,11 @@ public class CTraderOrderExecutor : ICTraderOrderExecutor
             var client = await _connectionManager.GetClientAsync();
             var accountId = _connectionManager.AccountId;
 
-            // Resolve cTrader position ID from our DB ID
-            var ctraderPositionId = await ResolveCTraderPositionIdAsync(positionId);
-
+            // positionId is already the cTrader position ID (controller resolves it)
             var req = new ProtoOAAmendPositionSLTPReq
             {
                 CtidTraderAccountId = accountId,
-                PositionId = ctraderPositionId
+                PositionId = positionId
             };
 
             if (stopLoss.HasValue)
@@ -111,7 +109,7 @@ public class CTraderOrderExecutor : ICTraderOrderExecutor
 
             // Subscribe BEFORE sending to avoid race condition
             var responseTask = client.OfType<ProtoOAExecutionEvent>()
-                .Where(e => e.Position != null && e.Position.PositionId == ctraderPositionId)
+                .Where(e => e.Position != null && e.Position.PositionId == positionId)
                 .Timeout(ResponseTimeout)
                 .FirstAsync()
                 .ToTask();
@@ -468,15 +466,6 @@ public class CTraderOrderExecutor : ICTraderOrderExecutor
         }
     }
 
-    private async Task<long> ResolveCTraderPositionIdAsync(long dbPositionId)
-    {
-        using var scope = _scopeFactory.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        var position = await db.Positions.FirstOrDefaultAsync(p => p.Id == dbPositionId);
-        if (position is null)
-            throw new InvalidOperationException($"Position {dbPositionId} not found in database");
-        return position.CTraderPositionId;
-    }
 }
 
 public class OrderResult

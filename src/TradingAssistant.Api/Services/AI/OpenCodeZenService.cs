@@ -89,7 +89,7 @@ public class OpenCodeZenService : IAiAnalysisService
 
             TRADE SUGGESTION: If your recommendation is "buy" or "sell", you MUST also provide a "trade" object with concrete price levels.
             - Place stop_loss beyond the nearest support (for buy) or resistance (for sell) with a small buffer.
-            - Place take_profit targeting at least a 1.5:1 reward-to-risk ratio.
+            - Place take_profit targeting at least a 2:1 reward-to-risk ratio. Prefer 2.5:1 or 3:1 when market structure allows.
             - If recommendation is "wait" or "reduce_exposure", set "trade" to null.
 
             Respond ONLY with valid JSON in this exact format (no markdown, no code fences):
@@ -180,19 +180,25 @@ public class OpenCodeZenService : IAiAnalysisService
             var tpDistance = Math.Abs(trade.TakeProfit - trade.Entry);
             var rr = tpDistance / slDistance;
 
-            // Enforce minimum 1.5:1 R:R
-            if (rr < 1.5m)
+            // Enforce configurable minimum R:R
+            var minRR = _config.GetValue<decimal>("Risk:MinRiskRewardRatio", 1.5m);
+            if (rr < minRR)
             {
-                var adjustedTpDistance = slDistance * 1.5m;
+                _logger.LogInformation(
+                    "Adjusting {Symbol} R:R from {OriginalRR}:1 to {MinRR}:1 (below minimum)",
+                    symbol, Math.Round(rr, 2), minRR);
+
+                var adjustedTpDistance = slDistance * minRR;
                 trade.TakeProfit = trade.Direction.Equals("buy", StringComparison.OrdinalIgnoreCase)
                     ? trade.Entry + adjustedTpDistance
                     : trade.Entry - adjustedTpDistance;
                 tpDistance = adjustedTpDistance;
-                rr = 1.5m;
+                rr = minRR;
             }
 
             trade.RiskRewardRatio = Math.Round(rr, 2);
-            trade.RiskPercent = 1.0m;
+            var riskPercent = _config.GetValue<decimal>("Risk:DefaultRiskPercent", 1.0m);
+            trade.RiskPercent = riskPercent;
 
             // Calculate pip size
             var pipSize = symbol.Contains("JPY") ? 0.01m
@@ -206,12 +212,31 @@ public class OpenCodeZenService : IAiAnalysisService
             var account = await _db.Accounts.FirstOrDefaultAsync(a => a.IsActive);
             if (account is not null)
             {
-                trade.RiskAmount = Math.Round(account.Balance * 0.01m, 2);
+                trade.RiskAmount = Math.Round(account.Balance * (riskPercent / 100m), 2);
                 trade.PotentialReward = Math.Round(trade.RiskAmount * trade.RiskRewardRatio, 2);
             }
 
             // Calculate lot size via position sizer
-            trade.LotSize = await _positionSizer.CalculateAsync(symbol, 1.0m, trade.Entry, trade.StopLoss);
+            trade.LotSize = await _positionSizer.CalculateAsync(symbol, riskPercent, trade.Entry, trade.StopLoss);
+
+            // Check margin requirements
+            var margin = await _positionSizer.CalculateMarginAsync(symbol, trade.LotSize, trade.Entry);
+            trade.MarginRequired = margin.Required;
+
+            if (!margin.Sufficient)
+            {
+                // Calculate minimum leverage needed: marginRequired * leverage / freeMargin
+                var minLeverage = margin.FreeMargin > 0
+                    ? (int)Math.Ceiling((double)(margin.Required * margin.Leverage / margin.FreeMargin))
+                    : 0;
+
+                trade.LeverageWarning = $"Insufficient margin: ${margin.Required} required, ${margin.FreeMargin} available at {margin.Leverage}:1 leverage. " +
+                    (minLeverage > 0 ? $"Increase leverage to at least {minLeverage}:1." : "Increase account balance or leverage.");
+
+                _logger.LogWarning(
+                    "Margin insufficient for {Symbol}: {Required} required, {Free} available at {Leverage}:1",
+                    symbol, margin.Required, margin.FreeMargin, margin.Leverage);
+            }
         }
         catch (Exception ex)
         {
@@ -261,34 +286,72 @@ public class OpenCodeZenService : IAiAnalysisService
         var trade = await _db.TradeEntries
             .Include(t => t.Tags)
             .Include(t => t.Notes)
-            .FirstOrDefaultAsync(t => t.Id == tradeId);
+            .FirstOrDefaultAsync(t => t.PositionId == tradeId);
 
         if (trade is null)
             throw new InvalidOperationException($"Trade {tradeId} not found");
 
         _logger.LogInformation("Reviewing trade {TradeId}", tradeId);
 
-        var tagsStr = string.Join(", ", trade.Tags.Select(t => t.Name));
-        var prompt = $$"""
-            Review this trade and provide feedback:
+        var tagsStr = trade.Tags.Count > 0
+            ? string.Join(", ", trade.Tags.Select(t => t.Name))
+            : "None";
+        var notesStr = trade.Notes.Count > 0
+            ? string.Join(" | ", trade.Notes.Select(n => n.Content))
+            : "None";
 
+        var priceMovement = trade.ExitPrice - trade.EntryPrice;
+        var priceMovementPct = trade.EntryPrice != 0
+            ? Math.Round(priceMovement / trade.EntryPrice * 100, 4)
+            : 0m;
+
+        var durationStr = trade.Duration.TotalHours >= 24
+            ? $"{trade.Duration.Days}d {trade.Duration.Hours}h {trade.Duration.Minutes}m"
+            : trade.Duration.TotalHours >= 1
+                ? $"{(int)trade.Duration.TotalHours}h {trade.Duration.Minutes}m"
+                : $"{trade.Duration.Minutes}m {trade.Duration.Seconds}s";
+
+        var prompt = $$"""
+            Review this closed forex trade and provide constructive feedback.
+            Focus on execution quality, timing, risk management, and what can be learned.
+
+            === TRADE DATA ===
             Symbol: {{trade.Symbol}}
             Direction: {{trade.Direction}}
-            Entry: {{trade.EntryPrice}}
-            Exit: {{trade.ExitPrice}}
-            Stop Loss: {{trade.StopLoss}}
-            Take Profit: {{trade.TakeProfit}}
-            PnL: {{trade.NetPnL}}
-            Duration: {{trade.Duration}}
-            R:R Ratio: {{trade.RiskRewardRatio}}
+            Volume: {{trade.Volume}} lots
+            Entry Price: {{trade.EntryPrice}}
+            Exit Price: {{trade.ExitPrice}}
+            Price Movement: {{priceMovement:+0.#####;-0.#####}} ({{priceMovementPct:+0.####;-0.####}}%)
+            PnL (pips): {{trade.PnLPips:+0.#;-0.#}} pips
+            Gross PnL: ${{trade.PnL:+0.00;-0.00}}
+            Commission: ${{trade.Commission:0.00}}
+            Swap: ${{trade.Swap:0.00}}
+            Net PnL: ${{trade.NetPnL:+0.00;-0.00}}
+            Stop Loss: {{(trade.StopLoss.HasValue ? trade.StopLoss.Value.ToString() : "Not set")}}
+            Take Profit: {{(trade.TakeProfit.HasValue ? trade.TakeProfit.Value.ToString() : "Not set")}}
+            R:R Ratio: {{(trade.RiskRewardRatio.HasValue ? $"{trade.RiskRewardRatio.Value:0.00}:1" : "N/A (no SL/TP)")}}
+            Duration: {{durationStr}}
+            Open Time: {{trade.OpenTime:yyyy-MM-dd HH:mm:ss}} UTC
+            Close Time: {{trade.CloseTime:yyyy-MM-dd HH:mm:ss}} UTC
+            Strategy: {{(string.IsNullOrEmpty(trade.Strategy) ? "Not specified" : trade.Strategy)}}
+            Setup: {{(string.IsNullOrEmpty(trade.Setup) ? "Not specified" : trade.Setup)}}
             Tags: {{tagsStr}}
+            Trader Notes: {{notesStr}}
+            === END TRADE DATA ===
 
-            Provide your review in the following JSON format:
+            REVIEW GUIDELINES:
+            - Evaluate the trade based on what IS present, not just what's missing.
+            - If the trade was profitable, acknowledge the successful execution.
+            - Consider the pip movement and whether the entry/exit timing was good.
+            - If SL/TP were not set, note it as an area for improvement but don't let it dominate the review.
+            - Score reflects overall execution: 1-3 = poor, 4-5 = below average, 6-7 = acceptable, 8-9 = good, 10 = excellent.
+
+            Respond ONLY with valid JSON in this exact format (no markdown, no code fences):
             {
-                "assessment": "overall assessment",
+                "assessment": "1-2 sentence overall assessment",
                 "strengths": ["strength1", "strength2"],
                 "weaknesses": ["weakness1", "weakness2"],
-                "improvements": ["improvement1", "improvement2"],
+                "improvements": ["actionable improvement1", "actionable improvement2"],
                 "score": 1-10
             }
             """;

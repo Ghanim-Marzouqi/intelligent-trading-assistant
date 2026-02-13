@@ -30,6 +30,8 @@ interface TradeSuggestion {
   riskAmount: number;
   potentialReward: number;
   rationale: string;
+  marginRequired?: number;
+  leverageWarning?: string;
 }
 
 interface MarketSessionInfo {
@@ -299,6 +301,21 @@ interface TradeReview {
                   </div>
                 </div>
 
+                @if (analysis.trade.marginRequired) {
+                  <div class="margin-info-row">
+                    <div class="margin-info-item">
+                      <span class="meta-label">Margin Required</span>
+                      <span class="meta-value mono">\${{ analysis.trade.marginRequired | number:'1.2-2' }}</span>
+                    </div>
+                    @if (analysis.trade.leverageWarning) {
+                      <div class="leverage-warning">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                        {{ analysis.trade.leverageWarning }}
+                      </div>
+                    }
+                  </div>
+                }
+
                 @if (analysis.trade.rationale) {
                   <div class="trade-rationale">{{ analysis.trade.rationale }}</div>
                 }
@@ -317,18 +334,73 @@ interface TradeReview {
                 }
 
                 <div class="trade-actions">
-                  @if (submittingTrade) {
-                    <button class="btn-open-trade" disabled>
-                      <svg class="spinner" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <circle cx="12" cy="12" r="10" stroke-dasharray="31.4" stroke-dashoffset="10"/>
+                  @if (showTradeForm) {
+                    <div class="trade-form">
+                      <div class="trade-form-header">
+                        <h5>Adjust & Confirm Order</h5>
+                        <button class="btn-close-form" (click)="cancelTrade()">&times;</button>
+                      </div>
+                      <div class="trade-form-grid">
+                        <div class="form-field">
+                          <label>Direction</label>
+                          <select [(ngModel)]="tradeForm.direction" class="form-input">
+                            <option value="Buy">Buy</option>
+                            <option value="Sell">Sell</option>
+                          </select>
+                        </div>
+                        <div class="form-field">
+                          <label>Order Type</label>
+                          <select [(ngModel)]="tradeForm.orderType" class="form-input">
+                            <option value="Market">Market</option>
+                            <option value="Limit">Limit</option>
+                            <option value="Stop">Stop</option>
+                          </select>
+                        </div>
+                        <div class="form-field">
+                          <label>Volume (lots)</label>
+                          <input type="number" [(ngModel)]="tradeForm.volume" class="form-input mono" step="0.01" min="0.01" />
+                        </div>
+                        <div class="form-field">
+                          <label>Entry Price</label>
+                          <input type="number" [(ngModel)]="tradeForm.entry" class="form-input mono" step="0.00001" />
+                        </div>
+                        <div class="form-field">
+                          <label>Stop Loss</label>
+                          <input type="number" [(ngModel)]="tradeForm.stopLoss" class="form-input mono" step="0.00001" />
+                        </div>
+                        <div class="form-field">
+                          <label>Take Profit</label>
+                          <input type="number" [(ngModel)]="tradeForm.takeProfit" class="form-input mono" step="0.00001" />
+                        </div>
+                      </div>
+                      <div class="trade-form-actions">
+                        @if (submittingTrade) {
+                          <button class="btn-place-order" disabled>
+                            <svg class="spinner" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                              <circle cx="12" cy="12" r="10" stroke-dasharray="31.4" stroke-dashoffset="10"/>
+                            </svg>
+                            Placing Order...
+                          </button>
+                        } @else {
+                          <button class="btn-place-order"
+                                  [class.btn-buy]="tradeForm.direction === 'Buy'"
+                                  [class.btn-sell]="tradeForm.direction === 'Sell'"
+                                  (click)="submitTrade()">
+                            {{ tradeForm.direction }} {{ tradeForm.volume }} {{ analysis.pair }}
+                          </button>
+                          <button class="btn-cancel" (click)="cancelTrade()">Cancel</button>
+                        }
+                      </div>
+                    </div>
+                  } @else if (isMarketClosed) {
+                    <button class="btn-open-trade btn-market-closed" disabled>
+                      <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/>
                       </svg>
-                      Placing Order...
+                      Market Closed
                     </button>
-                  } @else if (confirmingTrade) {
-                    <button class="btn-confirm-trade" (click)="openTrade()">Confirm {{ analysis.trade.direction }} {{ analysis.trade.lotSize }} {{ analysis.pair }}</button>
-                    <button class="btn-cancel" (click)="cancelTrade()">Cancel</button>
                   } @else {
-                    <button class="btn-open-trade" (click)="openTrade()">
+                    <button class="btn-open-trade" (click)="openTradeForm()">
                       <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/>
                       </svg>
@@ -1015,10 +1087,123 @@ interface TradeReview {
       }
     }
 
-    .btn-confirm-trade {
+    /* Margin Info */
+    .margin-info-row {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      margin-bottom: 14px;
+      padding: 10px 12px;
+      background: var(--surface);
+      border-radius: 6px;
+      border: 1px solid var(--border);
+    }
+
+    .margin-info-item {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .leverage-warning {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--warning);
+      font-size: 12px;
+      font-weight: 600;
+      flex: 1;
+
+      svg { width: 16px; height: 16px; flex-shrink: 0; }
+    }
+
+    /* Trade Form */
+    .trade-form {
+      width: 100%;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--surface);
+      padding: 16px;
+    }
+
+    .trade-form-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 14px;
+
+      h5 {
+        font-size: 13px;
+        font-weight: 700;
+        text-transform: uppercase;
+        color: var(--primary);
+        margin: 0;
+      }
+    }
+
+    .btn-close-form {
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      font-size: 20px;
+      cursor: pointer;
+      padding: 0 4px;
+      line-height: 1;
+
+      &:hover { color: var(--text); }
+    }
+
+    .trade-form-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+
+    .form-field {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+
+      label {
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+        color: var(--text-muted);
+      }
+    }
+
+    .form-input {
+      padding: 8px 10px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--surface-light);
+      color: var(--text-bright);
+      font-size: 14px;
+      font-weight: 600;
+      transition: border-color 0.2s, box-shadow 0.2s;
+
+      &:focus {
+        outline: none;
+        border-color: var(--primary);
+        box-shadow: 0 0 0 3px var(--primary-glow);
+      }
+    }
+
+    select.form-input {
+      cursor: pointer;
+    }
+
+    .trade-form-actions {
+      display: flex;
+      gap: 8px;
+      padding-top: 14px;
+      border-top: 1px solid var(--border);
+    }
+
+    .btn-place-order {
       flex: 1;
       padding: 10px 20px;
-      background: var(--danger);
       color: white;
       border: none;
       border-radius: 8px;
@@ -1027,9 +1212,43 @@ interface TradeReview {
       font-weight: 600;
       white-space: nowrap;
       transition: all 0.2s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      background: var(--primary);
 
-      &:hover {
+      &:hover:not(:disabled) {
         filter: brightness(1.1);
+        box-shadow: 0 0 20px var(--primary-glow);
+      }
+
+      &:disabled {
+        opacity: 0.7;
+        cursor: not-allowed;
+      }
+    }
+
+    .btn-market-closed {
+      background: var(--surface-light) !important;
+      color: var(--text-muted) !important;
+      border: 1px solid var(--border);
+      cursor: not-allowed;
+      opacity: 0.8;
+    }
+
+    .btn-place-order.btn-buy {
+      background: var(--success);
+
+      &:hover:not(:disabled) {
+        box-shadow: 0 0 20px rgba(34, 197, 94, 0.3);
+      }
+    }
+
+    .btn-place-order.btn-sell {
+      background: var(--danger);
+
+      &:hover:not(:disabled) {
         box-shadow: 0 0 20px rgba(239, 68, 68, 0.3);
       }
     }
@@ -1339,10 +1558,18 @@ export class AiAnalysisComponent implements OnInit {
   candles: CandleData[] = [];
   tradeLevels: TradeLevels | null = null;
 
-  // One-click trade state
-  confirmingTrade = false;
+  // Trade form state
+  showTradeForm = false;
   submittingTrade = false;
   tradeResult: { success: boolean; message: string } | null = null;
+  tradeForm = {
+    direction: '',
+    orderType: '',
+    volume: 0,
+    entry: 0,
+    stopLoss: 0,
+    takeProfit: 0
+  };
 
   private destroyRef = inject(DestroyRef);
 
@@ -1469,7 +1696,7 @@ export class AiAnalysisComponent implements OnInit {
     this.analysisError = '';
     this.candles = [];
     this.tradeLevels = null;
-    this.confirmingTrade = false;
+    this.showTradeForm = false;
     this.submittingTrade = false;
     this.tradeResult = null;
     this.http.get<MarketAnalysis>(
@@ -1518,28 +1745,41 @@ export class AiAnalysisComponent implements OnInit {
     });
   }
 
-  openTrade() {
+  get isMarketClosed(): boolean {
+    return this.analysis?.marketSession?.isMarketOpen === false;
+  }
+
+  openTradeForm() {
     if (!this.analysis?.trade) return;
-
-    if (!this.confirmingTrade) {
-      this.confirmingTrade = true;
-      this.tradeResult = null;
-      return;
-    }
-
-    this.submittingTrade = true;
-    this.tradeResult = null;
     const trade = this.analysis.trade;
     const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
 
-    const body = {
-      symbol: this.analysis.pair,
+    this.tradeForm = {
       direction: capitalize(trade.direction),
       orderType: capitalize(trade.orderType),
       volume: trade.lotSize,
-      price: trade.orderType.toLowerCase() !== 'market' ? trade.entry : null,
+      entry: trade.entry,
       stopLoss: trade.stopLoss,
       takeProfit: trade.takeProfit
+    };
+    this.showTradeForm = true;
+    this.tradeResult = null;
+  }
+
+  submitTrade() {
+    if (!this.analysis) return;
+
+    this.submittingTrade = true;
+    this.tradeResult = null;
+
+    const body = {
+      symbol: this.analysis.pair,
+      direction: this.tradeForm.direction,
+      orderType: this.tradeForm.orderType,
+      volume: this.tradeForm.volume,
+      price: this.tradeForm.orderType.toLowerCase() !== 'market' ? this.tradeForm.entry : null,
+      stopLoss: this.tradeForm.stopLoss,
+      takeProfit: this.tradeForm.takeProfit
     };
 
     this.http.post<{ success: boolean; positionId?: number; orderId?: number; errorMessage?: string }>(
@@ -1549,7 +1789,7 @@ export class AiAnalysisComponent implements OnInit {
     .subscribe({
       next: (res) => {
         this.submittingTrade = false;
-        this.confirmingTrade = false;
+        this.showTradeForm = false;
         if (res.success) {
           const id = res.positionId ?? res.orderId;
           this.tradeResult = { success: true, message: `Order placed successfully${id ? ' (ID: ' + id + ')' : ''}` };
@@ -1559,14 +1799,14 @@ export class AiAnalysisComponent implements OnInit {
       },
       error: (err) => {
         this.submittingTrade = false;
-        this.confirmingTrade = false;
+        this.showTradeForm = false;
         this.tradeResult = { success: false, message: err.error?.error || err.error?.message || err.message || 'Order failed' };
       }
     });
   }
 
   cancelTrade() {
-    this.confirmingTrade = false;
+    this.showTradeForm = false;
     this.tradeResult = null;
   }
 

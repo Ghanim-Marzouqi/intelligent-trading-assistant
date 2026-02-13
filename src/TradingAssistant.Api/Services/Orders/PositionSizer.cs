@@ -6,7 +6,10 @@ namespace TradingAssistant.Api.Services.Orders;
 public interface IPositionSizer
 {
     Task<decimal> CalculateAsync(string symbol, decimal riskPercent, decimal entryPrice, decimal stopLoss);
+    Task<MarginInfo> CalculateMarginAsync(string symbol, decimal lotSize, decimal price);
 }
+
+public record MarginInfo(decimal Required, decimal FreeMargin, int Leverage, bool Sufficient);
 
 public class PositionSizer : IPositionSizer
 {
@@ -28,6 +31,12 @@ public class PositionSizer : IPositionSizer
         if (account is null)
             throw new InvalidOperationException("No active account found");
 
+        // Get symbol volume constraints from DB (already stored in lots)
+        var symbolInfo = await _db.Symbols.FirstOrDefaultAsync(s => s.Name == symbol && s.IsActive);
+        var minLot = symbolInfo?.MinVolume ?? 0.01m;
+        var maxLot = symbolInfo?.MaxVolume ?? 100m;
+        var volumeStep = symbolInfo?.VolumeStep ?? 0.01m;
+
         var accountBalance = account.Balance;
         var riskAmount = accountBalance * (riskPercent / 100m);
 
@@ -47,19 +56,42 @@ public class PositionSizer : IPositionSizer
         // Formula: Lot Size = Risk Amount / (Pips at Risk × Pip Value)
         var lotSize = riskAmount / (pipsAtRisk * pipValue);
 
-        // Round to standard lot increments
-        lotSize = RoundToLotStep(lotSize, symbol);
+        // Round to broker's lot step and clamp to min/max
+        var rawLotSize = RoundToLotStep(lotSize, volumeStep);
+        lotSize = Math.Max(minLot, Math.Min(maxLot, rawLotSize));
 
-        // Apply min/max limits
-        var minLot = GetMinLot(symbol);
-        var maxLot = GetMaxLot(symbol);
-        lotSize = Math.Max(minLot, Math.Min(maxLot, lotSize));
+        if (rawLotSize < minLot)
+        {
+            _logger.LogWarning(
+                "Calculated lot size {RawLots} below minimum {MinLot} for {Symbol} — clamped to minimum. Risk will exceed {RiskPercent}%",
+                rawLotSize, minLot, symbol, riskPercent);
+        }
 
         _logger.LogInformation(
-            "Position size calculated: {Symbol} Risk={RiskPercent}% SL={SlDistance} pips → {LotSize} lots",
-            symbol, riskPercent, pipsAtRisk, lotSize);
+            "Position size calculated: {Symbol} Risk={RiskPercent}% SL={SlDistance} pips → {LotSize} lots (min={MinLot}, max={MaxLot}, step={Step})",
+            symbol, riskPercent, pipsAtRisk, lotSize, minLot, maxLot, volumeStep);
 
         return lotSize;
+    }
+
+    public async Task<MarginInfo> CalculateMarginAsync(string symbol, decimal lotSize, decimal price)
+    {
+        var account = await _db.Accounts.FirstOrDefaultAsync(a => a.IsActive);
+        if (account is null)
+            return new MarginInfo(0, 0, 1, false);
+
+        var leverage = account.Leverage > 0 ? account.Leverage : 100;
+
+        // Get contract size from symbol info (default 100,000 for forex)
+        var symbolInfo = await _db.Symbols.FirstOrDefaultAsync(s => s.Name == symbol && s.IsActive);
+        var contractSize = symbolInfo?.ContractSize > 0 ? symbolInfo.ContractSize : 100_000m;
+
+        var marginRequired = Math.Round(lotSize * contractSize * price / leverage, 2);
+        var freeMargin = account.FreeMargin > 0 ? account.FreeMargin
+            : account.Equity > 0 ? account.Equity - account.Margin
+            : account.Balance;
+
+        return new MarginInfo(marginRequired, freeMargin, leverage, marginRequired <= freeMargin);
     }
 
     private decimal GetPipValue(string symbol, string accountCurrency)
@@ -84,12 +116,9 @@ public class PositionSizer : IPositionSizer
         return 0.0001m;
     }
 
-    private decimal RoundToLotStep(decimal lotSize, string symbol)
+    private decimal RoundToLotStep(decimal lotSize, decimal volumeStep)
     {
-        var step = 0.01m; // Standard micro lot step
-        return Math.Floor(lotSize / step) * step;
+        if (volumeStep <= 0) volumeStep = 0.01m;
+        return Math.Floor(lotSize / volumeStep) * volumeStep;
     }
-
-    private decimal GetMinLot(string symbol) => 0.01m;
-    private decimal GetMaxLot(string symbol) => 100m;
 }

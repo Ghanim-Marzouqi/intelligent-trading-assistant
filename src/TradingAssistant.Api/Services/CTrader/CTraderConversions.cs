@@ -3,16 +3,16 @@ namespace TradingAssistant.Api.Services.CTrader;
 public static class CTraderConversions
 {
     /// <summary>
-    /// Convert cTrader volume in cents to lots (100 cents = 1 lot).
+    /// Convert cTrader volume units to lots (100,000 units = 1 standard lot).
     /// </summary>
     public static decimal CentsToLots(long volumeInCents)
-        => volumeInCents / 100m;
+        => volumeInCents / 100_000m;
 
     /// <summary>
-    /// Convert lots to cTrader volume in cents.
+    /// Convert lots to cTrader volume units (1 lot = 100,000 units).
     /// </summary>
     public static long LotsToCents(decimal lots)
-        => (long)(lots * 100m);
+        => (long)(lots * 100_000m);
 
     /// <summary>
     /// Convert a cTrader money value (balance, commission, swap, profit) to decimal.

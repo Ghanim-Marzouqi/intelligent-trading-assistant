@@ -6,7 +6,9 @@ using TradingAssistant.Api.Hubs;
 using TradingAssistant.Api.Models.Alerts;
 using TradingAssistant.Api.Services.Alerts.Conditions;
 using TradingAssistant.Api.Services.CTrader;
+using TradingAssistant.Api.Services.AI;
 using TradingAssistant.Api.Services.Notifications;
+using TradingAssistant.Api.Services.Orders;
 
 namespace TradingAssistant.Api.Services.Alerts;
 
@@ -231,7 +233,7 @@ public class AlertEngine : BackgroundService
                     try
                     {
                         using var enrichScope = _serviceProvider.CreateScope();
-                        var aiService = enrichScope.ServiceProvider.GetRequiredService<AI.IAiAnalysisService>();
+                        var aiService = enrichScope.ServiceProvider.GetRequiredService<IAiAnalysisService>();
                         var enrichDb = enrichScope.ServiceProvider.GetRequiredService<AppDbContext>();
 
                         var enrichment = await aiService.EnrichAlertAsync(rule.Symbol, triggerPrice, trigger.Message);
@@ -253,6 +255,52 @@ public class AlertEngine : BackgroundService
                     catch (Exception ex)
                     {
                         _logger.LogWarning(ex, "AI enrichment failed for alert {AlertName}", rule.Name);
+                    }
+                });
+            }
+
+            // Auto-prepare order when enabled on the rule
+            if (rule.AutoPrepareOrder)
+            {
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        using var orderScope = _serviceProvider.CreateScope();
+                        var aiService = orderScope.ServiceProvider.GetRequiredService<IAiAnalysisService>();
+                        var orderManager = orderScope.ServiceProvider.GetRequiredService<IOrderManager>();
+
+                        var analysis = await aiService.AnalyzeMarketAsync(rule.Symbol);
+
+                        if (analysis.Trade is not null && analysis.Recommendation is "buy" or "sell")
+                        {
+                            var request = new OrderRequest
+                            {
+                                Symbol = rule.Symbol,
+                                Direction = analysis.Trade.Direction.Equals("buy", StringComparison.OrdinalIgnoreCase)
+                                    ? "Buy" : "Sell",
+                                EntryPrice = analysis.Trade.Entry,
+                                StopLoss = analysis.Trade.StopLoss,
+                                TakeProfit = analysis.Trade.TakeProfit,
+                                RiskPercent = analysis.Trade.RiskPercent
+                            };
+
+                            await orderManager.PrepareOrderAsync(request);
+
+                            _logger.LogInformation(
+                                "Auto-prepared order from alert {AlertName}: {Symbol} {Direction}",
+                                rule.Name, rule.Symbol, request.Direction);
+                        }
+                        else
+                        {
+                            _logger.LogInformation(
+                                "Alert {AlertName} fired with AutoPrepareOrder but AI did not suggest a trade for {Symbol}",
+                                rule.Name, rule.Symbol);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Auto-prepare order failed for alert {AlertName}", rule.Name);
                     }
                 });
             }

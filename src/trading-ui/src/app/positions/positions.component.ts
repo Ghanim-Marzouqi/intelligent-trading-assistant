@@ -261,7 +261,8 @@ interface OrderResult {
               <tr>
                 <th>Symbol</th>
                 <th>Direction</th>
-                <th>Volume</th>
+                <th>Volume (lots)</th>
+                <th>Notional</th>
                 <th>Entry Price</th>
                 <th>Current Price</th>
                 <th>SL</th>
@@ -278,15 +279,36 @@ interface OrderResult {
                     {{ pos.direction }}
                   </td>
                   <td>{{ pos.volume }}</td>
+                  <td>{{ pos.notionalUsd | currency }}</td>
                   <td>{{ pos.entryPrice }}</td>
                   <td>{{ pos.currentPrice }}</td>
-                  <td>{{ pos.stopLoss || '-' }}</td>
-                  <td>{{ pos.takeProfit || '-' }}</td>
+                  <td>
+                    @if (editingPositionId === pos.id) {
+                      <input type="number" class="inline-input" [(ngModel)]="editSL" step="0.00001" placeholder="SL" />
+                    } @else {
+                      {{ pos.stopLoss || '-' }}
+                    }
+                  </td>
+                  <td>
+                    @if (editingPositionId === pos.id) {
+                      <input type="number" class="inline-input" [(ngModel)]="editTP" step="0.00001" placeholder="TP" />
+                    } @else {
+                      {{ pos.takeProfit || '-' }}
+                    }
+                  </td>
                   <td [class.positive]="pos.unrealizedPnL > 0" [class.negative]="pos.unrealizedPnL < 0">
                     {{ pos.unrealizedPnL | currency }}
                   </td>
-                  <td>
-                    <button class="danger small" (click)="closePosition(pos.id)">Close</button>
+                  <td class="actions-cell">
+                    @if (editingPositionId === pos.id) {
+                      <button class="success small" (click)="saveModify(pos.id)" [disabled]="modifying">
+                        {{ modifying ? '...' : 'Save' }}
+                      </button>
+                      <button class="small" (click)="cancelModify()">Cancel</button>
+                    } @else {
+                      <button class="small" (click)="startModify(pos)">Modify</button>
+                      <button class="danger small" (click)="closePosition(pos.id)">Close</button>
+                    }
                   </td>
                 </tr>
               }
@@ -305,7 +327,8 @@ interface OrderResult {
               <tr>
                 <th>Symbol</th>
                 <th>Direction</th>
-                <th>Volume</th>
+                <th>Volume (lots)</th>
+                <th>Notional</th>
                 <th>Entry</th>
                 <th>Exit</th>
                 <th>P&L</th>
@@ -318,6 +341,7 @@ interface OrderResult {
                   <td>{{ pos.symbol }}</td>
                   <td>{{ pos.direction }}</td>
                   <td>{{ pos.volume }}</td>
+                  <td>{{ pos.notionalUsd | currency }}</td>
                   <td>{{ pos.entryPrice }}</td>
                   <td>{{ pos.closePrice }}</td>
                   <td [class.positive]="pos.realizedPnL > 0" [class.negative]="pos.realizedPnL < 0">
@@ -356,6 +380,22 @@ interface OrderResult {
     button.small {
       padding: 4px 8px;
       font-size: 12px;
+    }
+
+    .actions-cell {
+      display: flex;
+      gap: 4px;
+      align-items: center;
+    }
+
+    .inline-input {
+      width: 90px;
+      padding: 3px 6px;
+      font-size: 12px;
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      background: var(--surface);
+      color: var(--text);
     }
 
     /* Result Banner */
@@ -669,6 +709,11 @@ export class PositionsComponent implements OnInit, OnDestroy {
   submitting = false;
   resultBanner: { success: boolean; message: string } | null = null;
 
+  editingPositionId: number | null = null;
+  editSL: number | null = null;
+  editTP: number | null = null;
+  modifying = false;
+
   orderTypes: ('Market' | 'Limit' | 'Stop')[] = ['Market', 'Limit', 'Stop'];
 
   tradeForm = {
@@ -931,9 +976,44 @@ export class PositionsComponent implements OnInit, OnDestroy {
       this.http.post(`${environment.apiUrl}/api/positions/${id}/close`, {}).subscribe({
         next: () => {
           this.loadPositions();
+          this.loadHistory();
         }
       });
     }
+  }
+
+  startModify(pos: any) {
+    this.editingPositionId = pos.id;
+    this.editSL = pos.stopLoss || null;
+    this.editTP = pos.takeProfit || null;
+  }
+
+  cancelModify() {
+    this.editingPositionId = null;
+    this.editSL = null;
+    this.editTP = null;
+  }
+
+  saveModify(id: number) {
+    this.modifying = true;
+    this.http.post(`${environment.apiUrl}/api/positions/${id}/modify`, {
+      stopLoss: this.editSL || null,
+      takeProfit: this.editTP || null
+    }).subscribe({
+      next: () => {
+        this.modifying = false;
+        this.editingPositionId = null;
+        this.resultBanner = { success: true, message: 'Position modified successfully' };
+        this.loadPositions();
+      },
+      error: (err) => {
+        this.modifying = false;
+        this.resultBanner = {
+          success: false,
+          message: err.error?.error ?? err.error ?? 'Failed to modify position'
+        };
+      }
+    });
   }
 
   private resetForm() {

@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace TradingAssistant.Api.Models.Alerts;
 
 public class AlertCondition
@@ -14,6 +16,7 @@ public class AlertCondition
     public LogicalOperator? CombineWith { get; set; }
     public DateTime CreatedAt { get; set; }
 
+    [JsonIgnore]
     public AlertRule AlertRule { get; set; } = null!;
 }
 

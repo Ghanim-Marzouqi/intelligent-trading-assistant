@@ -1,5 +1,8 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+using TradingAssistant.Api.Data;
+using TradingAssistant.Api.Models.Analytics;
 using TradingAssistant.Api.Services.AI;
 using TradingAssistant.Api.Services.CTrader;
 
@@ -12,15 +15,18 @@ public class AiController : ControllerBase
 {
     private readonly IAiAnalysisService _aiService;
     private readonly ICTraderHistoricalData _historicalData;
+    private readonly AppDbContext _db;
     private readonly ILogger<AiController> _logger;
 
     public AiController(
         IAiAnalysisService aiService,
         ICTraderHistoricalData historicalData,
+        AppDbContext db,
         ILogger<AiController> logger)
     {
         _aiService = aiService;
         _historicalData = historicalData;
+        _db = db;
         _logger = logger;
     }
 
@@ -39,6 +45,7 @@ public class AiController : ControllerBase
         try
         {
             var analysis = await _aiService.AnalyzeMarketAsync(symbol.ToUpperInvariant(), timeframe);
+            await SaveSnapshotAsync(analysis, "manual");
             return Ok(analysis);
         }
         catch (InvalidOperationException ex) when (ex.Message.Contains("not configured"))
@@ -113,6 +120,56 @@ public class AiController : ControllerBase
             return StatusCode(500, new { error = "An error occurred during news analysis." });
         }
     }
+    [HttpGet("history")]
+    public async Task<ActionResult<IEnumerable<AnalysisSnapshot>>> GetAnalysisHistory(
+        [FromQuery] string? symbol = null,
+        [FromQuery] int limit = 50)
+    {
+        var query = _db.AnalysisSnapshots.AsQueryable();
+
+        if (!string.IsNullOrEmpty(symbol))
+            query = query.Where(a => a.Symbol == symbol.ToUpperInvariant());
+
+        return await query
+            .OrderByDescending(a => a.CreatedAt)
+            .Take(limit)
+            .ToListAsync();
+    }
+
+    private async Task SaveSnapshotAsync(MarketAnalysis analysis, string source)
+    {
+        try
+        {
+            var snapshot = new AnalysisSnapshot
+            {
+                Symbol = analysis.Pair,
+                Bias = analysis.Bias,
+                Confidence = analysis.Confidence,
+                Recommendation = analysis.Recommendation,
+                Reasoning = analysis.Reasoning,
+                Support = analysis.KeyLevels.Support,
+                Resistance = analysis.KeyLevels.Resistance,
+                TradeDirection = analysis.Trade?.Direction,
+                TradeEntry = analysis.Trade?.Entry,
+                TradeStopLoss = analysis.Trade?.StopLoss,
+                TradeTakeProfit = analysis.Trade?.TakeProfit,
+                TradeLotSize = analysis.Trade?.LotSize,
+                TradeRiskReward = analysis.Trade?.RiskRewardRatio,
+                MarginRequired = analysis.Trade?.MarginRequired,
+                LeverageWarning = analysis.Trade?.LeverageWarning,
+                Source = source,
+                CreatedAt = DateTime.UtcNow
+            };
+
+            _db.AnalysisSnapshots.Add(snapshot);
+            await _db.SaveChangesAsync();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to save analysis snapshot for {Symbol}", analysis.Pair);
+        }
+    }
+
     [HttpGet("candles/{symbol}")]
     public async Task<ActionResult<IEnumerable<CandleDto>>> GetCandles(
         string symbol,

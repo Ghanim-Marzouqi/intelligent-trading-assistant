@@ -12,6 +12,7 @@ public class AlertRule
     public bool NotifyWhatsApp { get; set; }
     public bool NotifyDashboard { get; set; } = true;
     public bool AiEnrichEnabled { get; set; } = true;
+    public bool AutoPrepareOrder { get; set; }
     public int? MaxTriggers { get; set; }
     public int TriggerCount { get; set; }
     public DateTime? LastTriggeredAt { get; set; }

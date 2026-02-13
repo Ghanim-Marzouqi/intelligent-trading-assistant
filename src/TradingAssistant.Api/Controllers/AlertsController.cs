@@ -33,7 +33,10 @@ public class AlertsController : ControllerBase
         if (!string.IsNullOrEmpty(symbol))
             query = query.Where(a => a.Symbol == symbol.ToUpperInvariant());
 
-        return await query.OrderByDescending(a => a.CreatedAt).ToListAsync();
+        return await query
+            .Include(a => a.Conditions)
+            .OrderByDescending(a => a.CreatedAt)
+            .ToListAsync();
     }
 
     [HttpGet("{id}")]
@@ -57,9 +60,30 @@ public class AlertsController : ControllerBase
             Symbol = request.Symbol.ToUpperInvariant(),
             Name = request.Name,
             Description = request.Description,
+            Type = request.Type ?? AlertType.Price,
+            AutoPrepareOrder = request.AutoPrepareOrder ?? false,
+            AiEnrichEnabled = request.AiEnrichEnabled ?? true,
+            NotifyTelegram = request.NotifyTelegram ?? true,
+            NotifyDashboard = request.NotifyDashboard ?? true,
+            MaxTriggers = request.MaxTriggers,
             IsActive = true,
             CreatedAt = DateTime.UtcNow
         };
+
+        if (request.Conditions is { Count: > 0 })
+        {
+            foreach (var c in request.Conditions)
+            {
+                alert.Conditions.Add(new AlertCondition
+                {
+                    Type = c.Type,
+                    Operator = c.Operator,
+                    Value = c.Value,
+                    CombineWith = c.CombineWith,
+                    CreatedAt = DateTime.UtcNow
+                });
+            }
+        }
 
         _db.AlertRules.Add(alert);
         await _db.SaveChangesAsync();
@@ -79,6 +103,11 @@ public class AlertsController : ControllerBase
         alert.Name = request.Name ?? alert.Name;
         alert.Description = request.Description ?? alert.Description;
         alert.IsActive = request.IsActive ?? alert.IsActive;
+        alert.AutoPrepareOrder = request.AutoPrepareOrder ?? alert.AutoPrepareOrder;
+        alert.AiEnrichEnabled = request.AiEnrichEnabled ?? alert.AiEnrichEnabled;
+        alert.NotifyTelegram = request.NotifyTelegram ?? alert.NotifyTelegram;
+        alert.NotifyDashboard = request.NotifyDashboard ?? alert.NotifyDashboard;
+        alert.MaxTriggers = request.MaxTriggers ?? alert.MaxTriggers;
         alert.UpdatedAt = DateTime.UtcNow;
 
         await _db.SaveChangesAsync();
@@ -118,5 +147,30 @@ public class AlertsController : ControllerBase
     }
 }
 
-public record CreateAlertRequest(string Symbol, string Name, string? Description);
-public record UpdateAlertRequest(string? Name, string? Description, bool? IsActive);
+public record CreateAlertRequest(
+    string Symbol,
+    string Name,
+    string? Description,
+    AlertType? Type,
+    bool? AutoPrepareOrder,
+    bool? AiEnrichEnabled,
+    bool? NotifyTelegram,
+    bool? NotifyDashboard,
+    int? MaxTriggers,
+    List<CreateAlertConditionDto>? Conditions);
+
+public record CreateAlertConditionDto(
+    ConditionType Type,
+    ComparisonOperator Operator,
+    decimal Value,
+    LogicalOperator? CombineWith);
+
+public record UpdateAlertRequest(
+    string? Name,
+    string? Description,
+    bool? IsActive,
+    bool? AutoPrepareOrder,
+    bool? AiEnrichEnabled,
+    bool? NotifyTelegram,
+    bool? NotifyDashboard,
+    int? MaxTriggers);

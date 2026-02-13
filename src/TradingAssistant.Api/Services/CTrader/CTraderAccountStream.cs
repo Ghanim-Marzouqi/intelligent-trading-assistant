@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Reactive.Linq;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
@@ -22,11 +23,14 @@ public class CTraderAccountStream : ICTraderAccountStream
 {
     private readonly ICTraderConnectionManager _connectionManager;
     private readonly ICTraderSymbolResolver _symbolResolver;
+    private readonly ICTraderPriceStream _priceStream;
     private readonly IHubContext<TradingHub, ITradingHubClient> _hubContext;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<CTraderAccountStream> _logger;
 
     private IDisposable? _executionSubscription;
+    private readonly ConcurrentDictionary<long, DateTime> _lastPnLBroadcast = new();
+    private static readonly TimeSpan PnLThrottleInterval = TimeSpan.FromSeconds(2);
 
     public event EventHandler<PositionEventArgs>? OnPositionOpened;
     public event EventHandler<PositionEventArgs>? OnPositionClosed;
@@ -35,12 +39,14 @@ public class CTraderAccountStream : ICTraderAccountStream
     public CTraderAccountStream(
         ICTraderConnectionManager connectionManager,
         ICTraderSymbolResolver symbolResolver,
+        ICTraderPriceStream priceStream,
         IHubContext<TradingHub, ITradingHubClient> hubContext,
         IServiceScopeFactory scopeFactory,
         ILogger<CTraderAccountStream> logger)
     {
         _connectionManager = connectionManager;
         _symbolResolver = symbolResolver;
+        _priceStream = priceStream;
         _hubContext = hubContext;
         _scopeFactory = scopeFactory;
         _logger = logger;
@@ -67,7 +73,20 @@ public class CTraderAccountStream : ICTraderAccountStream
             },
             error => _logger.LogError(error, "Account stream error"));
 
-        _logger.LogInformation("Account stream started — listening for execution events");
+        // Subscribe to price updates to broadcast real-time P&L for open positions
+        _priceStream.OnPriceUpdate += async (_, args) =>
+        {
+            try
+            {
+                await BroadcastPositionPnLAsync(args.Symbol, args.Bid);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Error broadcasting P&L for {Symbol}", args.Symbol);
+            }
+        };
+
+        _logger.LogInformation("Account stream started — listening for execution events and price updates");
     }
 
     public Task StopAsync()
@@ -221,11 +240,23 @@ public class CTraderAccountStream : ICTraderAccountStream
             db.Positions.Add(position);
         }
 
-        position.Symbol = symbolName;
-        position.Direction = protoPos.TradeData.TradeSide == ProtoOATradeSide.Buy
-            ? TradeDirection.Buy : TradeDirection.Sell;
-        position.Volume = CTraderConversions.CentsToLots(protoPos.TradeData.Volume);
-        position.EntryPrice = protoPos.HasPrice ? (decimal)protoPos.Price : 0m;
+        // Only set fields that aren't already populated — the close event's TradeData
+        // may have Volume=0 and Price=0 for a fully-closed position, which would
+        // overwrite the correct values saved when the position was opened.
+        if (string.IsNullOrEmpty(position.Symbol))
+            position.Symbol = symbolName;
+        if (position.Volume == 0m)
+        {
+            var closeVolume = CTraderConversions.CentsToLots(protoPos.TradeData.Volume);
+            if (closeVolume > 0) position.Volume = closeVolume;
+        }
+        if (position.EntryPrice == 0m && protoPos.HasPrice && (decimal)protoPos.Price > 0)
+            position.EntryPrice = (decimal)protoPos.Price;
+        if (position.Direction == default)
+        {
+            position.Direction = protoPos.TradeData.TradeSide == ProtoOATradeSide.Buy
+                ? TradeDirection.Buy : TradeDirection.Sell;
+        }
         position.Swap = CTraderConversions.MoneyToDecimal(protoPos.Swap, moneyDigits);
         position.Commission = protoPos.HasCommission
             ? CTraderConversions.MoneyToDecimal(protoPos.Commission, moneyDigits)
@@ -256,6 +287,7 @@ public class CTraderAccountStream : ICTraderAccountStream
         var args = new PositionEventArgs
         {
             PositionId = protoPos.PositionId,
+            AccountId = dbAccountId,
             Symbol = symbolName,
             Direction = position.Direction.ToString(),
             Volume = position.Volume,
@@ -263,7 +295,10 @@ public class CTraderAccountStream : ICTraderAccountStream
             CurrentPrice = position.ClosePrice ?? position.EntryPrice,
             PnL = position.RealizedPnL ?? realizedPnl,
             StopLoss = position.StopLoss,
-            TakeProfit = position.TakeProfit
+            TakeProfit = position.TakeProfit,
+            OpenTime = position.OpenTime,
+            Commission = position.Commission,
+            Swap = position.Swap
         };
 
         _logger.LogInformation("Position closed: {Symbol} PnL={PnL}", symbolName, args.PnL);
@@ -354,6 +389,21 @@ public class CTraderAccountStream : ICTraderAccountStream
         order.TakeProfit = protoOrder.HasTakeProfit ? (decimal?)protoOrder.TakeProfit : null;
         order.Status = MapOrderStatus(protoOrder.OrderStatus);
 
+        // SL/TP amendments arrive as OrderAccepted/OrderReplaced with position data.
+        // Update the position's SL/TP so it stays in sync without waiting for reconciliation.
+        if (evt.Position != null)
+        {
+            var protoPos = evt.Position;
+            var position = await db.Positions.FirstOrDefaultAsync(
+                p => p.CTraderPositionId == protoPos.PositionId);
+            if (position != null)
+            {
+                position.StopLoss = protoPos.HasStopLoss ? (decimal?)protoPos.StopLoss : null;
+                position.TakeProfit = protoPos.HasTakeProfit ? (decimal?)protoPos.TakeProfit : null;
+                position.UpdatedAt = DateTime.UtcNow;
+            }
+        }
+
         await db.SaveChangesAsync();
     }
 
@@ -402,6 +452,51 @@ public class CTraderAccountStream : ICTraderAccountStream
             position.UpdatedAt = DateTime.UtcNow;
             await db.SaveChangesAsync();
         }
+    }
+
+    private async Task BroadcastPositionPnLAsync(string symbol, decimal currentPrice)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+        var positions = await db.Positions
+            .Where(p => p.Symbol == symbol && p.Status == PositionStatus.Open)
+            .ToListAsync();
+
+        if (positions.Count == 0) return;
+
+        foreach (var position in positions)
+        {
+            // Throttle: max once per 2 seconds per position
+            var now = DateTime.UtcNow;
+            if (_lastPnLBroadcast.TryGetValue(position.Id, out var lastBroadcast)
+                && now - lastBroadcast < PnLThrottleInterval)
+                continue;
+
+            _lastPnLBroadcast[position.Id] = now;
+
+            // Calculate unrealized PnL
+            var pnl = position.Direction == TradeDirection.Buy
+                ? (currentPrice - position.EntryPrice) * position.Volume * 100_000m
+                : (position.EntryPrice - currentPrice) * position.Volume * 100_000m;
+
+            // Update DB
+            position.CurrentPrice = currentPrice;
+            position.UnrealizedPnL = pnl;
+            position.UpdatedAt = now;
+
+            // Broadcast via SignalR
+            await _hubContext.Clients.All.ReceivePositionUpdate(new PositionUpdate(
+                position.CTraderPositionId,
+                position.Symbol,
+                position.Direction.ToString(),
+                position.Volume,
+                position.EntryPrice,
+                currentPrice,
+                pnl));
+        }
+
+        await db.SaveChangesAsync();
     }
 
     private async Task HandlePositionOpened(PositionEventArgs args)
@@ -458,6 +553,7 @@ public class CTraderAccountStream : ICTraderAccountStream
 public class PositionEventArgs : EventArgs
 {
     public long PositionId { get; init; }
+    public long AccountId { get; init; }
     public string Symbol { get; init; } = string.Empty;
     public string Direction { get; init; } = string.Empty;
     public decimal Volume { get; init; }
@@ -466,6 +562,9 @@ public class PositionEventArgs : EventArgs
     public decimal PnL { get; init; }
     public decimal? StopLoss { get; init; }
     public decimal? TakeProfit { get; init; }
+    public DateTime OpenTime { get; init; }
+    public decimal Commission { get; init; }
+    public decimal Swap { get; init; }
 }
 
 public class OrderEventArgs : EventArgs

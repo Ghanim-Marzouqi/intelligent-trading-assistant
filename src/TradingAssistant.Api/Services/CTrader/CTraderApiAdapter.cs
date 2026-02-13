@@ -149,7 +149,9 @@ public class CTraderApiAdapter : BackgroundService
         var unrealizedPnL = openPositions.Sum(p => p.UnrealizedPnL);
         account.UnrealizedPnL = unrealizedPnL;
         account.Equity = account.Balance + unrealizedPnL;
-        account.FreeMargin = account.Equity - openPositions.Sum(p => p.Volume * 1000m);
+        var leverage = trader.HasLeverageInCents ? (int)(trader.LeverageInCents / 100) : 1;
+        var usedMargin = openPositions.Sum(p => p.Volume * 100_000m * p.EntryPrice / (leverage > 0 ? leverage : 1));
+        account.FreeMargin = account.Equity - usedMargin;
 
         account.Currency = trader.HasDepositAssetId
             ? _symbolResolver.GetAssetName(trader.DepositAssetId)

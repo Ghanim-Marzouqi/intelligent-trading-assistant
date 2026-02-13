@@ -61,6 +61,28 @@ public class JournalController : ControllerBase
         return trade;
     }
 
+    [HttpPut("{id}")]
+    public async Task<IActionResult> UpdateTrade(long id, UpdateTradeRequest request)
+    {
+        var trade = await _db.TradeEntries.FindAsync(id);
+        if (trade is null)
+            return NotFound();
+
+        if (request.Strategy is not null)
+            trade.Strategy = request.Strategy;
+        if (request.Setup is not null)
+            trade.Setup = request.Setup;
+        if (request.Emotion is not null)
+            trade.Emotion = request.Emotion;
+        if (request.Rating.HasValue)
+            trade.Rating = request.Rating.Value;
+
+        trade.UpdatedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync();
+
+        return NoContent();
+    }
+
     [HttpPost("{id}/tags")]
     public async Task<IActionResult> AddTag(long id, AddTagRequest request)
     {
@@ -76,6 +98,21 @@ public class JournalController : ControllerBase
         };
 
         _db.TradeTags.Add(tag);
+        await _db.SaveChangesAsync();
+
+        return NoContent();
+    }
+
+    [HttpDelete("{id}/tags/{tagId}")]
+    public async Task<IActionResult> DeleteTag(long id, long tagId)
+    {
+        var tag = await _db.TradeTags
+            .FirstOrDefaultAsync(t => t.Id == tagId && t.TradeEntryId == id);
+
+        if (tag is null)
+            return NotFound();
+
+        _db.TradeTags.Remove(tag);
         await _db.SaveChangesAsync();
 
         return NoContent();
@@ -131,6 +168,7 @@ public class JournalController : ControllerBase
     }
 }
 
+public record UpdateTradeRequest(string? Strategy, string? Setup, string? Emotion, int? Rating);
 public record AddTagRequest(string Tag);
 public record AddNoteRequest(string Content);
 public record DailyStatsDto(DateTime Date, int TotalTrades, int WinningTrades, decimal TotalPnL, decimal WinRate);
