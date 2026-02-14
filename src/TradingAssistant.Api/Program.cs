@@ -241,8 +241,7 @@ app.MapHub<TradingHub>("/hub").RequireCors("TradingUI");
 app.MapHealthChecks("/health");
 app.MapMetrics();
 
-// Auto-apply migrations in development
-if (app.Environment.IsDevelopment())
+// Auto-apply pending migrations on startup
 {
     using var scope = app.Services.CreateScope();
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
