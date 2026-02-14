@@ -161,7 +161,9 @@ public class CTraderAccountStream : ICTraderAccountStream
                 await UpsertDealAsync(db, account.Id, evt.Deal, symbolName, moneyDigits);
             }
 
-            var isClosing = protoPos.PositionStatus == ProtoOAPositionStatus.PositionStatusClosed;
+            // Detect close: position status or deal with ClosePositionDetail
+            var isClosing = protoPos.PositionStatus == ProtoOAPositionStatus.PositionStatusClosed
+                || (evt.Deal?.ClosePositionDetail != null);
 
             if (isClosing)
             {
@@ -203,8 +205,15 @@ public class CTraderAccountStream : ICTraderAccountStream
         position.Direction = protoPos.TradeData.TradeSide == ProtoOATradeSide.Buy
             ? TradeDirection.Buy : TradeDirection.Sell;
         var contractSize = _symbolResolver.GetContractSize(symbolName);
-        position.Volume = CTraderConversions.VolumeToLots(protoPos.TradeData.Volume, contractSize);
-        position.EntryPrice = protoPos.HasPrice ? (decimal)protoPos.Price : 0m;
+        var newVolume = CTraderConversions.VolumeToLots(protoPos.TradeData.Volume, contractSize);
+        var newPrice = protoPos.HasPrice ? (decimal)protoPos.Price : 0m;
+
+        // Only overwrite volume/price if the incoming values are non-zero,
+        // to avoid clobbering good data with empty values from amendments or partial events
+        if (newVolume > 0 || isNew)
+            position.Volume = newVolume;
+        if (newPrice > 0 || isNew)
+            position.EntryPrice = newPrice;
         position.StopLoss = protoPos.HasStopLoss ? (decimal?)protoPos.StopLoss : null;
         position.TakeProfit = protoPos.HasTakeProfit ? (decimal?)protoPos.TakeProfit : null;
         position.Swap = CTraderConversions.MoneyToDecimal(protoPos.Swap, moneyDigits);
