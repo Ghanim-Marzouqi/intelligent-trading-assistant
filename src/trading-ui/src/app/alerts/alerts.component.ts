@@ -767,7 +767,8 @@ export class AlertsComponent implements OnInit {
 
   loadSymbols() {
     this.http.get<SymbolInfo[]>(`${environment.apiUrl}/api/positions/symbols`).subscribe({
-      next: (data) => this.symbols = data
+      next: (data) => this.symbols = data,
+      error: () => {}
     });
   }
 
@@ -781,13 +782,15 @@ export class AlertsComponent implements OnInit {
 
   loadAlerts() {
     this.http.get<any[]>(`${environment.apiUrl}/api/alerts`).subscribe({
-      next: (data) => this.alerts = data
+      next: (data) => this.alerts = data,
+      error: () => {}
     });
   }
 
   loadHistory() {
     this.http.get<any[]>(`${environment.apiUrl}/api/alerts/history`).subscribe({
-      next: (data) => this.history = data
+      next: (data) => this.history = data,
+      error: () => {}
     });
   }
 
@@ -810,7 +813,8 @@ export class AlertsComponent implements OnInit {
         this.loadAlerts();
         this.showCreateForm = false;
         this.newAlert = this.freshAlert();
-      }
+      },
+      error: () => {}
     });
   }
 
@@ -818,7 +822,8 @@ export class AlertsComponent implements OnInit {
     this.http.put(`${environment.apiUrl}/api/alerts/${alert.id}`, {
       isActive: !alert.isActive
     }).subscribe({
-      next: () => this.loadAlerts()
+      next: () => this.loadAlerts(),
+      error: () => {}
     });
   }
 
@@ -831,7 +836,8 @@ export class AlertsComponent implements OnInit {
     });
     if (!ok) return;
     this.http.delete(`${environment.apiUrl}/api/alerts/${id}`).subscribe({
-      next: () => this.loadAlerts()
+      next: () => this.loadAlerts(),
+      error: () => {}
     });
   }
 }

@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using TradingAssistant.Api.Data;
 using TradingAssistant.Api.Models.Trading;
@@ -61,6 +62,8 @@ public class PositionsController : ControllerBase
         [FromQuery] DateTime? from = null,
         [FromQuery] int limit = 50)
     {
+        limit = Math.Clamp(limit, 1, 500);
+
         var query = _db.Positions
             .Where(p => p.Status == PositionStatus.Closed);
 
@@ -79,6 +82,7 @@ public class PositionsController : ControllerBase
     }
 
     [HttpPost("{id}/close")]
+    [EnableRateLimiting("trading")]
     public async Task<IActionResult> ClosePosition(long id)
     {
         var position = await _db.Positions.FindAsync(id);
@@ -98,6 +102,7 @@ public class PositionsController : ControllerBase
     }
 
     [HttpPost("{id}/modify")]
+    [EnableRateLimiting("trading")]
     public async Task<IActionResult> ModifyPosition(long id, ModifyPositionRequest request)
     {
         var position = await _db.Positions.FindAsync(id);
@@ -191,6 +196,7 @@ public class PositionsController : ControllerBase
     }
 
     [HttpPost("open")]
+    [EnableRateLimiting("trading")]
     public async Task<ActionResult<OrderResult>> OpenPosition(OpenPositionRequest request)
     {
         if (string.IsNullOrWhiteSpace(request.Symbol))

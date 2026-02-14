@@ -38,6 +38,8 @@ public class OrderManager : IOrderManager
 
     public async Task<PreparedOrder> PrepareOrderAsync(OrderRequest request)
     {
+        ValidateOrderRequest(request);
+
         _logger.LogInformation("Preparing order: {Symbol} {Direction}", request.Symbol, request.Direction);
 
         // Calculate position size based on risk parameters
@@ -127,6 +129,42 @@ public class OrderManager : IOrderManager
         }
 
         return Task.CompletedTask;
+    }
+
+    private static void ValidateOrderRequest(OrderRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.Symbol))
+            throw new ArgumentException("Symbol must not be empty.", nameof(request));
+
+        if (request.Direction is not ("Buy" or "Sell"))
+            throw new ArgumentException("Direction must be 'Buy' or 'Sell'.", nameof(request));
+
+        if (request.EntryPrice <= 0)
+            throw new ArgumentException("EntryPrice must be greater than 0.", nameof(request));
+
+        if (request.StopLoss <= 0)
+            throw new ArgumentException("StopLoss must be greater than 0.", nameof(request));
+
+        if (request.TakeProfit <= 0)
+            throw new ArgumentException("TakeProfit must be greater than 0.", nameof(request));
+
+        if (request.RiskPercent < 0.1m || request.RiskPercent > 10m)
+            throw new ArgumentException("RiskPercent must be between 0.1 and 10.", nameof(request));
+
+        if (request.Direction == "Buy")
+        {
+            if (request.StopLoss >= request.EntryPrice)
+                throw new ArgumentException("For Buy orders, StopLoss must be below EntryPrice.", nameof(request));
+            if (request.TakeProfit <= request.EntryPrice)
+                throw new ArgumentException("For Buy orders, TakeProfit must be above EntryPrice.", nameof(request));
+        }
+        else // Sell
+        {
+            if (request.StopLoss <= request.EntryPrice)
+                throw new ArgumentException("For Sell orders, StopLoss must be above EntryPrice.", nameof(request));
+            if (request.TakeProfit >= request.EntryPrice)
+                throw new ArgumentException("For Sell orders, TakeProfit must be below EntryPrice.", nameof(request));
+        }
     }
 }
 

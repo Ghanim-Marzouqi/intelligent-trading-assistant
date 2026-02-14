@@ -58,11 +58,23 @@ public class TradeJournalService : ITradeJournalService
         // Enrich with calculated metrics
         await _enricher.EnrichAsync(entry);
 
-        _db.TradeEntries.Add(entry);
-        await _db.SaveChangesAsync();
+        await using var transaction = await _db.Database.BeginTransactionAsync();
+        try
+        {
+            _db.TradeEntries.Add(entry);
+            await _db.SaveChangesAsync();
 
-        // Update aggregated analytics
-        await _analytics.UpdateDailyStatsAsync(entry);
+            // Update aggregated analytics within the same transaction
+            await _analytics.UpdateDailyStatsAsync(entry);
+            await _analytics.UpdatePairStatsAsync(entry);
+
+            await transaction.CommitAsync();
+        }
+        catch
+        {
+            await transaction.RollbackAsync();
+            throw;
+        }
 
         _logger.LogInformation("Trade recorded: {TradeId} with PnL {PnL}",
             entry.Id, entry.NetPnL);

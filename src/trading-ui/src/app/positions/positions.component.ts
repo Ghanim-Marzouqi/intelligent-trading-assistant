@@ -934,7 +934,8 @@ export class PositionsComponent implements OnInit, OnDestroy {
 
   loadSymbols() {
     this.http.get<SymbolInfo[]>(`${environment.apiUrl}/api/positions/symbols`).subscribe({
-      next: (data) => { this.symbols = data; }
+      next: (data) => { this.symbols = data; },
+      error: () => {}
     });
   }
 
@@ -1037,7 +1038,8 @@ export class PositionsComponent implements OnInit, OnDestroy {
     this.http.get<any[]>(`${environment.apiUrl}/api/positions/history`).subscribe({
       next: (data) => {
         this.history = data;
-      }
+      },
+      error: () => {}
     });
   }
 
@@ -1053,7 +1055,8 @@ export class PositionsComponent implements OnInit, OnDestroy {
       next: () => {
         this.loadPositions();
         this.loadHistory();
-      }
+      },
+      error: () => {}
     });
   }
 

@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using TradingAssistant.Api.Services.Orders;
 
 namespace TradingAssistant.Api.Controllers;
@@ -30,6 +31,7 @@ public class OrdersController : ControllerBase
     }
 
     [HttpPost("{token}/approve")]
+    [EnableRateLimiting("trading")]
     public async Task<IActionResult> ApproveOrder(string token)
     {
         try

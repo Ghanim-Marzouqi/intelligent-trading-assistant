@@ -17,6 +17,7 @@ public class AlertEngine : BackgroundService
     private readonly IServiceProvider _serviceProvider;
     private readonly ICTraderPriceStream _priceStream;
     private readonly INotificationService _notificationService;
+    private readonly IBackgroundTaskQueue _taskQueue;
     private readonly ILogger<AlertEngine> _logger;
     private readonly ConcurrentDictionary<string, List<AlertRule>> _rulesBySymbol = new();
     private readonly ConcurrentDictionary<string, decimal> _previousPrices = new();
@@ -31,11 +32,13 @@ public class AlertEngine : BackgroundService
         IServiceProvider serviceProvider,
         ICTraderPriceStream priceStream,
         INotificationService notificationService,
+        IBackgroundTaskQueue taskQueue,
         ILogger<AlertEngine> logger)
     {
         _serviceProvider = serviceProvider;
         _priceStream = priceStream;
         _notificationService = notificationService;
+        _taskQueue = taskQueue;
         _logger = logger;
     }
 
@@ -225,84 +228,77 @@ public class AlertEngine : BackgroundService
             // Send notifications
             await _notificationService.SendAlertAsync(trigger);
 
-            // Fire-and-forget AI enrichment (only when enabled on the rule)
+            // Enqueue AI enrichment (only when enabled on the rule)
             if (rule.AiEnrichEnabled)
             {
-                _ = Task.Run(async () =>
+                var triggerId = trigger.Id;
+                var triggerSymbol = trigger.Symbol;
+                var triggerMessage = trigger.Message;
+                var triggeredAt = trigger.TriggeredAt;
+                var ruleName = rule.Name;
+                var ruleSymbol = rule.Symbol;
+
+                await _taskQueue.QueueAsync(async (sp, ct) =>
                 {
-                    try
+                    var aiService = sp.GetRequiredService<IAiAnalysisService>();
+                    var enrichDb = sp.GetRequiredService<AppDbContext>();
+
+                    var enrichment = await aiService.EnrichAlertAsync(ruleSymbol, triggerPrice, triggerMessage);
+
+                    var savedTrigger = await enrichDb.AlertTriggers.FindAsync(triggerId);
+                    if (savedTrigger is not null)
                     {
-                        using var enrichScope = _serviceProvider.CreateScope();
-                        var aiService = enrichScope.ServiceProvider.GetRequiredService<IAiAnalysisService>();
-                        var enrichDb = enrichScope.ServiceProvider.GetRequiredService<AppDbContext>();
-
-                        var enrichment = await aiService.EnrichAlertAsync(rule.Symbol, triggerPrice, trigger.Message);
-
-                        var savedTrigger = await enrichDb.AlertTriggers.FindAsync(trigger.Id);
-                        if (savedTrigger is not null)
-                        {
-                            savedTrigger.AiEnrichment = enrichment;
-                            await enrichDb.SaveChangesAsync();
-                        }
-
-                        // Push enriched follow-up to SignalR clients
-                        var hubContext = enrichScope.ServiceProvider
-                            .GetRequiredService<IHubContext<TradingHub, ITradingHubClient>>();
-                        await hubContext.Clients.All.ReceiveAlert(new AlertNotification(
-                            trigger.Id, trigger.Symbol, trigger.Message,
-                            "info", trigger.TriggeredAt, enrichment));
+                        savedTrigger.AiEnrichment = enrichment;
+                        await enrichDb.SaveChangesAsync();
                     }
-                    catch (Exception ex)
-                    {
-                        _logger.LogWarning(ex, "AI enrichment failed for alert {AlertName}", rule.Name);
-                    }
-                });
+
+                    // Push enriched follow-up to SignalR clients
+                    var hubContext = sp.GetRequiredService<IHubContext<TradingHub, ITradingHubClient>>();
+                    await hubContext.Clients.All.ReceiveAlert(new AlertNotification(
+                        triggerId, triggerSymbol, triggerMessage,
+                        "info", triggeredAt, enrichment));
+                }, $"AI enrichment for alert {ruleName}");
             }
 
-            // Auto-prepare order when enabled on the rule
+            // Enqueue auto-prepare order when enabled on the rule
             if (rule.AutoPrepareOrder)
             {
-                _ = Task.Run(async () =>
+                var ruleName = rule.Name;
+                var ruleSymbol = rule.Symbol;
+
+                await _taskQueue.QueueAsync(async (sp, ct) =>
                 {
-                    try
+                    var aiService = sp.GetRequiredService<IAiAnalysisService>();
+                    var orderManager = sp.GetRequiredService<IOrderManager>();
+
+                    var analysis = await aiService.AnalyzeMarketAsync(ruleSymbol);
+
+                    if (analysis.Trade is not null && analysis.Recommendation is "buy" or "sell")
                     {
-                        using var orderScope = _serviceProvider.CreateScope();
-                        var aiService = orderScope.ServiceProvider.GetRequiredService<IAiAnalysisService>();
-                        var orderManager = orderScope.ServiceProvider.GetRequiredService<IOrderManager>();
-
-                        var analysis = await aiService.AnalyzeMarketAsync(rule.Symbol);
-
-                        if (analysis.Trade is not null && analysis.Recommendation is "buy" or "sell")
+                        var request = new OrderRequest
                         {
-                            var request = new OrderRequest
-                            {
-                                Symbol = rule.Symbol,
-                                Direction = analysis.Trade.Direction.Equals("buy", StringComparison.OrdinalIgnoreCase)
-                                    ? "Buy" : "Sell",
-                                EntryPrice = analysis.Trade.Entry,
-                                StopLoss = analysis.Trade.StopLoss,
-                                TakeProfit = analysis.Trade.TakeProfit,
-                                RiskPercent = analysis.Trade.RiskPercent
-                            };
+                            Symbol = ruleSymbol,
+                            Direction = analysis.Trade.Direction.Equals("buy", StringComparison.OrdinalIgnoreCase)
+                                ? "Buy" : "Sell",
+                            EntryPrice = analysis.Trade.Entry,
+                            StopLoss = analysis.Trade.StopLoss,
+                            TakeProfit = analysis.Trade.TakeProfit,
+                            RiskPercent = analysis.Trade.RiskPercent
+                        };
 
-                            await orderManager.PrepareOrderAsync(request);
+                        await orderManager.PrepareOrderAsync(request);
 
-                            _logger.LogInformation(
-                                "Auto-prepared order from alert {AlertName}: {Symbol} {Direction}",
-                                rule.Name, rule.Symbol, request.Direction);
-                        }
-                        else
-                        {
-                            _logger.LogInformation(
-                                "Alert {AlertName} fired with AutoPrepareOrder but AI did not suggest a trade for {Symbol}",
-                                rule.Name, rule.Symbol);
-                        }
+                        _logger.LogInformation(
+                            "Auto-prepared order from alert {AlertName}: {Symbol} {Direction}",
+                            ruleName, ruleSymbol, request.Direction);
                     }
-                    catch (Exception ex)
+                    else
                     {
-                        _logger.LogWarning(ex, "Auto-prepare order failed for alert {AlertName}", rule.Name);
+                        _logger.LogInformation(
+                            "Alert {AlertName} fired with AutoPrepareOrder but AI did not suggest a trade for {Symbol}",
+                            ruleName, ruleSymbol);
                     }
-                });
+                }, $"Auto-prepare order for alert {ruleName}");
             }
         }
         catch (Exception ex)

@@ -587,8 +587,17 @@ public class TelegramBotService : BackgroundService
         {
             using var scope = _serviceProvider.CreateScope();
             var aiService = scope.ServiceProvider.GetRequiredService<AI.IAiAnalysisService>();
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
-            var watchlist = new[] { "EURUSD", "GBPUSD", "USDJPY", "XAUUSD" };
+            var dbSymbols = await db.WatchlistSymbols
+                .OrderBy(w => w.AddedAt)
+                .Select(w => w.Symbol)
+                .ToArrayAsync();
+
+            var watchlist = dbSymbols.Length > 0
+                ? dbSymbols
+                : new[] { "EURUSD", "GBPUSD", "USDJPY", "XAUUSD" };
+
             var briefing = await aiService.GenerateDailyBriefingAsync(watchlist);
 
             return $"*Daily Briefing*\n\n{briefing}";

@@ -4,11 +4,12 @@ import { Subscription } from 'rxjs';
 import { filter } from 'rxjs/operators';
 import { AuthService } from './auth/auth.service';
 import { ConfirmDialogComponent } from './shared/components/confirm-dialog.component';
+import { NotificationToastComponent } from './shared/components/notification-toast.component';
 
 @Component({
   selector: 'app-root',
   standalone: true,
-  imports: [RouterOutlet, RouterLink, RouterLinkActive, ConfirmDialogComponent],
+  imports: [RouterOutlet, RouterLink, RouterLinkActive, ConfirmDialogComponent, NotificationToastComponent],
   template: `
     <button class="hamburger" (click)="sidebarOpen = !sidebarOpen" [attr.aria-label]="sidebarOpen ? 'Close menu' : 'Open menu'">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -100,6 +101,7 @@ import { ConfirmDialogComponent } from './shared/components/confirm-dialog.compo
       </main>
     </div>
     <app-confirm-dialog></app-confirm-dialog>
+    <app-notification-toast></app-notification-toast>
   `,
   styles: [`
     .app-container {

@@ -120,10 +120,21 @@ public class AnalyticsAggregator : IAnalyticsAggregator
             .OrderBy(t => t.CloseTime)
             .ToListAsync();
 
-        foreach (var trade in trades)
+        await using var transaction = await _db.Database.BeginTransactionAsync();
+        try
         {
-            await UpdateDailyStatsAsync(trade);
-            await UpdatePairStatsAsync(trade);
+            foreach (var trade in trades)
+            {
+                await UpdateDailyStatsAsync(trade);
+                await UpdatePairStatsAsync(trade);
+            }
+
+            await transaction.CommitAsync();
+        }
+        catch
+        {
+            await transaction.RollbackAsync();
+            throw;
         }
 
         _logger.LogInformation("Recalculated analytics for {Count} trades", trades.Count);

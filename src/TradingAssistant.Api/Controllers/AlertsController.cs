@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using TradingAssistant.Api.Data;
 using TradingAssistant.Api.Models.Alerts;
+using TradingAssistant.Api.Services.CTrader;
 
 namespace TradingAssistant.Api.Controllers;
 
@@ -12,11 +13,13 @@ namespace TradingAssistant.Api.Controllers;
 public class AlertsController : ControllerBase
 {
     private readonly AppDbContext _db;
+    private readonly ICTraderPriceStream _priceStream;
     private readonly ILogger<AlertsController> _logger;
 
-    public AlertsController(AppDbContext db, ILogger<AlertsController> logger)
+    public AlertsController(AppDbContext db, ICTraderPriceStream priceStream, ILogger<AlertsController> logger)
     {
         _db = db;
+        _priceStream = priceStream;
         _logger = logger;
     }
 
@@ -55,6 +58,24 @@ public class AlertsController : ControllerBase
     [HttpPost]
     public async Task<ActionResult<AlertRule>> CreateAlert(CreateAlertRequest request)
     {
+        if (string.IsNullOrWhiteSpace(request.Symbol))
+            return BadRequest(new { error = "Symbol is required." });
+
+        if (!_priceStream.IsKnownSymbol(request.Symbol))
+            return BadRequest(new { error = $"Unknown trading symbol: {request.Symbol}" });
+
+        if (string.IsNullOrWhiteSpace(request.Name))
+            return BadRequest(new { error = "Name is required." });
+
+        if (request.Name.Length > 100)
+            return BadRequest(new { error = "Name must be 100 characters or fewer." });
+
+        if (request.MaxTriggers.HasValue && request.MaxTriggers.Value <= 0)
+            return BadRequest(new { error = "MaxTriggers must be greater than 0." });
+
+        if (request.Conditions is null or { Count: 0 })
+            return BadRequest(new { error = "At least one condition must be provided." });
+
         var alert = new AlertRule
         {
             Symbol = request.Symbol.ToUpperInvariant(),
@@ -135,6 +156,8 @@ public class AlertsController : ControllerBase
         [FromQuery] int limit = 50,
         [FromQuery] DateTime? since = null)
     {
+        limit = Math.Clamp(limit, 1, 500);
+
         var query = _db.AlertTriggers.AsQueryable();
 
         if (since.HasValue)

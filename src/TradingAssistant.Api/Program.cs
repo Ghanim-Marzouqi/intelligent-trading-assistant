@@ -12,6 +12,7 @@ using TradingAssistant.Api.Services.Alerts;
 using TradingAssistant.Api.Services.AI;
 using TradingAssistant.Api.Services.CTrader;
 using TradingAssistant.Api.Services.Journal;
+using TradingAssistant.Api.Services;
 using TradingAssistant.Api.Services.Notifications;
 using TradingAssistant.Api.Services.Orders;
 using Prometheus;
@@ -149,6 +150,14 @@ builder.Services.AddRateLimiter(options =>
         opt.QueueLimit = 0;
     });
 
+    // Strict limit for trading/order execution endpoints: 10 per minute
+    options.AddFixedWindowLimiter("trading", opt =>
+    {
+        opt.PermitLimit = 10;
+        opt.Window = TimeSpan.FromMinutes(1);
+        opt.QueueLimit = 0;
+    });
+
     options.OnRejected = async (context, cancellationToken) =>
     {
         context.HttpContext.Response.StatusCode = StatusCodes.Status429TooManyRequests;
@@ -168,6 +177,12 @@ builder.Services.AddSingleton<ICTraderAccountStream, CTraderAccountStream>();
 builder.Services.AddScoped<ICTraderOrderExecutor, CTraderOrderExecutor>();
 builder.Services.AddSingleton<ICTraderHistoricalData, CTraderHistoricalData>();
 
+// Background Task Queue
+var backgroundTaskQueue = new BackgroundTaskQueue();
+builder.Services.AddSingleton(backgroundTaskQueue);
+builder.Services.AddSingleton<IBackgroundTaskQueue>(backgroundTaskQueue);
+builder.Services.AddHostedService<BackgroundTaskProcessor>();
+
 // Alert Services
 builder.Services.AddSingleton<AlertEngine>();
 builder.Services.AddHostedService<AlertEngine>(sp => sp.GetRequiredService<AlertEngine>());
@@ -185,7 +200,10 @@ builder.Services.AddScoped<IPositionSizer, PositionSizer>();
 builder.Services.AddScoped<IRiskGuard, RiskGuard>();
 
 // AI Services
-builder.Services.AddHttpClient<IAiAnalysisService, OpenCodeZenService>();
+builder.Services.AddHttpClient<IAiAnalysisService, OpenCodeZenService>(client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(30);
+});
 
 // Scheduled Analysis
 builder.Services.AddHostedService<TradingAssistant.Api.Services.Analysis.ScheduledAnalysisService>();

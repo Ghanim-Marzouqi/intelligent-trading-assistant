@@ -6,13 +6,14 @@ import { Chart, registerables } from 'chart.js';
 import { AppComponent } from './app/app.component';
 import { routes } from './app/app.routes';
 import { authInterceptor } from './app/auth/auth.interceptor';
+import { errorInterceptor } from './app/shared/interceptors/error.interceptor';
 
 Chart.register(...registerables);
 
 bootstrapApplication(AppComponent, {
   providers: [
     provideRouter(routes),
-    provideHttpClient(withInterceptors([authInterceptor])),
+    provideHttpClient(withInterceptors([authInterceptor, errorInterceptor])),
     provideAnimations()
   ]
 }).catch(err => console.error(err));

@@ -141,24 +141,34 @@ public class CTraderAccountStream : ICTraderAccountStream
         var account = await db.Accounts.FirstOrDefaultAsync(a => a.CTraderAccountId == accountId);
         if (account is null) return;
 
-        // Handle deal if present (for recording in deals table)
-        if (evt.Deal != null)
+        await using var transaction = await db.Database.BeginTransactionAsync();
+        try
         {
-            await UpsertDealAsync(db, account.Id, evt.Deal, symbolName, moneyDigits);
+            // Handle deal if present (for recording in deals table)
+            if (evt.Deal != null)
+            {
+                await UpsertDealAsync(db, account.Id, evt.Deal, symbolName, moneyDigits);
+            }
+
+            var isClosing = protoPos.PositionStatus == ProtoOAPositionStatus.PositionStatusClosed;
+
+            if (isClosing)
+            {
+                await HandlePositionClosedInternalAsync(db, account.Id, protoPos, symbolName, moneyDigits, evt.Deal);
+            }
+            else
+            {
+                await HandlePositionOpenOrUpdateAsync(db, account.Id, protoPos, symbolName, moneyDigits);
+            }
+
+            await db.SaveChangesAsync();
+            await transaction.CommitAsync();
         }
-
-        var isClosing = protoPos.PositionStatus == ProtoOAPositionStatus.PositionStatusClosed;
-
-        if (isClosing)
+        catch
         {
-            await HandlePositionClosedInternalAsync(db, account.Id, protoPos, symbolName, moneyDigits, evt.Deal);
+            await transaction.RollbackAsync();
+            throw;
         }
-        else
-        {
-            await HandlePositionOpenOrUpdateAsync(db, account.Id, protoPos, symbolName, moneyDigits);
-        }
-
-        await db.SaveChangesAsync();
     }
 
     private async Task HandlePositionOpenOrUpdateAsync(
@@ -307,7 +317,8 @@ public class CTraderAccountStream : ICTraderAccountStream
         // Record in trade journal
         try
         {
-            var journalService = _scopeFactory.CreateScope().ServiceProvider
+            using var journalScope = _scopeFactory.CreateScope();
+            var journalService = journalScope.ServiceProvider
                 .GetRequiredService<ITradeJournalService>();
             await journalService.RecordTradeAsync(args);
         }

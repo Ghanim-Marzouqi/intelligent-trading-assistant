@@ -28,6 +28,7 @@ public class CTraderPriceStream : ICTraderPriceStream
     private readonly ConcurrentDictionary<string, decimal> _lastAsks = new();
     private readonly ConcurrentDictionary<string, List<decimal>> _priceHistory = new();
     private readonly HashSet<string> _subscribedSymbols = [];
+    private readonly object _symbolLock = new();
     private const int MaxPriceHistory = 100;
 
     private IDisposable? _spotSubscription;
@@ -74,7 +75,10 @@ public class CTraderPriceStream : ICTraderPriceStream
         _logger.LogInformation("Price stream stopping...");
         _spotSubscription?.Dispose();
         _spotSubscription = null;
-        _subscribedSymbols.Clear();
+        lock (_symbolLock)
+        {
+            _subscribedSymbols.Clear();
+        }
         return Task.CompletedTask;
     }
 
@@ -82,13 +86,19 @@ public class CTraderPriceStream : ICTraderPriceStream
     {
         symbol = symbol.ToUpperInvariant();
 
-        if (!_subscribedSymbols.Add(symbol))
-            return;
+        lock (_symbolLock)
+        {
+            if (!_subscribedSymbols.Add(symbol))
+                return;
+        }
 
         if (!_symbolResolver.TryGetSymbolId(symbol, out var symbolId))
         {
             _logger.LogWarning("Cannot subscribe to {Symbol}: unknown symbol", symbol);
-            _subscribedSymbols.Remove(symbol);
+            lock (_symbolLock)
+            {
+                _subscribedSymbols.Remove(symbol);
+            }
             return;
         }
 
@@ -110,7 +120,12 @@ public class CTraderPriceStream : ICTraderPriceStream
     {
         symbol = symbol.ToUpperInvariant();
 
-        if (!_subscribedSymbols.Remove(symbol))
+        bool removed;
+        lock (_symbolLock)
+        {
+            removed = _subscribedSymbols.Remove(symbol);
+        }
+        if (!removed)
             return;
 
         if (!_symbolResolver.TryGetSymbolId(symbol, out var symbolId))

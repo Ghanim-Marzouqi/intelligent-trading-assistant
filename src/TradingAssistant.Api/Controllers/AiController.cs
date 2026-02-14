@@ -125,6 +125,8 @@ public class AiController : ControllerBase
         [FromQuery] string? symbol = null,
         [FromQuery] int limit = 50)
     {
+        limit = Math.Clamp(limit, 1, 500);
+
         var query = _db.AnalysisSnapshots.AsQueryable();
 
         if (!string.IsNullOrEmpty(symbol))

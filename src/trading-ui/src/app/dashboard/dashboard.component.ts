@@ -375,24 +375,32 @@ export class DashboardComponent implements OnInit, OnDestroy {
     // Connect SignalR for real-time updates
     this.signalR.connect();
 
-    this.signalR.connectionState$.subscribe(connected => {
-      this.isConnected = connected;
+    this.signalR.connectionState$.subscribe({
+      next: connected => { this.isConnected = connected; },
+      error: err => console.error('SignalR connectionState$ error', err)
     });
 
-    this.signalR.positions$.subscribe(positions => {
-      if (positions.length > 0) {
-        this.positions = positions;
-      }
+    this.signalR.positions$.subscribe({
+      next: positions => {
+        if (positions.length > 0) {
+          this.positions = positions;
+        }
+      },
+      error: err => console.error('SignalR positions$ error', err)
     });
 
-    this.signalR.alerts$.subscribe(alerts => {
-      this.alerts = alerts.slice(0, 5);
+    this.signalR.alerts$.subscribe({
+      next: alerts => { this.alerts = alerts.slice(0, 5); },
+      error: err => console.error('SignalR alerts$ error', err)
     });
 
-    this.signalR.accountUpdates$.subscribe(update => {
-      if (update) {
-        this.account = update;
-      }
+    this.signalR.accountUpdates$.subscribe({
+      next: update => {
+        if (update) {
+          this.account = update;
+        }
+      },
+      error: err => console.error('SignalR accountUpdates$ error', err)
     });
   }
 
@@ -443,13 +451,15 @@ export class DashboardComponent implements OnInit, OnDestroy {
       next: (data) => {
         this.watchlistSymbols = data.symbols.map((s: any) => s.symbol);
         this.scheduleHours = data.scheduleUtcHours;
-      }
+      },
+      error: () => {}
     });
   }
 
   loadPendingOrders() {
     this.http.get<any[]>(`${environment.apiUrl}/api/orders/pending`).subscribe({
-      next: (data) => this.pendingOrders = data.map(o => ({ ...o, processing: false }))
+      next: (data) => this.pendingOrders = data.map(o => ({ ...o, processing: false })),
+      error: () => {}
     });
     // Poll every 30s for new pending orders
     setTimeout(() => this.loadPendingOrders(), 30000);
@@ -469,7 +479,8 @@ export class DashboardComponent implements OnInit, OnDestroy {
 
   rejectOrder(token: string) {
     this.http.post(`${environment.apiUrl}/api/orders/${token}/reject`, {}).subscribe({
-      next: () => this.loadPendingOrders()
+      next: () => this.loadPendingOrders(),
+      error: () => {}
     });
   }
 
