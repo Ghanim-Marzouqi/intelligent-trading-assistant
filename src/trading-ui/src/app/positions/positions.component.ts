@@ -263,58 +263,116 @@ interface OrderResult {
                 <tr>
                   <th>Symbol</th>
                   <th>Direction</th>
-                  <th>Volume (lots)</th>
-                  <th>Notional</th>
-                  <th>Entry Price</th>
-                  <th>Current Price</th>
-                  <th>SL</th>
-                  <th>TP</th>
+                  <th>Volume</th>
+                  <th>Entry</th>
+                  <th>Current</th>
+                  <th>SL / TP</th>
                   <th>P&L</th>
-                  <th>Actions</th>
+                  <th class="th-actions">Actions</th>
                 </tr>
               </thead>
               <tbody>
                 @for (pos of positions; track pos.id) {
-                  <tr>
-                    <td data-label="Symbol"><strong>{{ pos.symbol }}</strong></td>
-                    <td data-label="Direction" [class.buy]="pos.direction === 'Buy'" [class.sell]="pos.direction === 'Sell'">
-                      {{ pos.direction }}
+                  <tr [class.row-expanded]="editingPositionId === pos.id">
+                    <td data-label="Symbol">
+                      <span class="symbol-badge">{{ pos.symbol }}</span>
                     </td>
-                    <td data-label="Volume">{{ pos.volume }}</td>
-                    <td data-label="Notional">{{ pos.notionalUsd | currency }}</td>
-                    <td data-label="Entry Price">{{ pos.entryPrice }}</td>
-                    <td data-label="Current Price">{{ pos.currentPrice }}</td>
-                    <td data-label="SL">
-                      @if (editingPositionId === pos.id) {
-                        <input type="number" class="inline-input" [(ngModel)]="editSL" step="0.00001" placeholder="SL" />
-                      } @else {
-                        {{ pos.stopLoss || '-' }}
-                      }
+                    <td data-label="Direction">
+                      <span class="dir-badge" [class.dir-buy]="pos.direction === 'Buy'" [class.dir-sell]="pos.direction === 'Sell'">
+                        <svg viewBox="0 0 16 16" fill="currentColor" class="dir-icon">
+                          @if (pos.direction === 'Buy') {
+                            <path d="M8 3l5 8H3z"/>
+                          } @else {
+                            <path d="M8 13l5-8H3z"/>
+                          }
+                        </svg>
+                        {{ pos.direction }}
+                      </span>
                     </td>
-                    <td data-label="TP">
-                      @if (editingPositionId === pos.id) {
-                        <input type="number" class="inline-input" [(ngModel)]="editTP" step="0.00001" placeholder="TP" />
-                      } @else {
-                        {{ pos.takeProfit || '-' }}
-                      }
+                    <td data-label="Volume">
+                      <span class="mono">{{ pos.volume }}</span>
                     </td>
-                    <td data-label="P&L" [class.positive]="pos.unrealizedPnL > 0" [class.negative]="pos.unrealizedPnL < 0">
-                      {{ pos.unrealizedPnL | currency }}
+                    <td data-label="Entry">
+                      <span class="mono">{{ pos.entryPrice }}</span>
+                    </td>
+                    <td data-label="Current">
+                      <span class="mono">{{ pos.currentPrice }}</span>
+                    </td>
+                    <td data-label="SL / TP">
+                      <div class="sl-tp-cell">
+                        <span class="sl-val" [class.sl-set]="pos.stopLoss">
+                          {{ pos.stopLoss || '—' }}
+                        </span>
+                        <span class="sl-tp-sep">/</span>
+                        <span class="tp-val" [class.tp-set]="pos.takeProfit">
+                          {{ pos.takeProfit || '—' }}
+                        </span>
+                      </div>
+                    </td>
+                    <td data-label="P&L">
+                      <span class="pnl-badge" [class.pnl-pos]="pos.unrealizedPnL > 0" [class.pnl-neg]="pos.unrealizedPnL < 0">
+                        {{ pos.unrealizedPnL >= 0 ? '+' : '' }}{{ pos.unrealizedPnL | currency }}
+                      </span>
                     </td>
                     <td data-label="Actions" class="actions-cell">
-                      <div class="card-actions">
-                        @if (editingPositionId === pos.id) {
-                          <button class="success small" (click)="saveModify(pos.id)" [disabled]="modifying">
-                            {{ modifying ? '...' : 'Save' }}
-                          </button>
-                          <button class="small" (click)="cancelModify()">Cancel</button>
-                        } @else {
-                          <button class="small" (click)="startModify(pos)">Modify</button>
-                          <button class="danger small" (click)="closePosition(pos.id)">Close</button>
-                        }
+                      <div class="action-btns">
+                        <button
+                          class="act-btn act-modify"
+                          [class.act-active]="editingPositionId === pos.id"
+                          (click)="editingPositionId === pos.id ? cancelModify() : startModify(pos)"
+                          title="Modify SL/TP">
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                          </svg>
+                        </button>
+                        <button
+                          class="act-btn act-close"
+                          (click)="closePosition(pos.id)"
+                          title="Close position">
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <line x1="18" y1="6" x2="6" y2="18"/>
+                            <line x1="6" y1="6" x2="18" y2="18"/>
+                          </svg>
+                        </button>
                       </div>
                     </td>
                   </tr>
+                  @if (editingPositionId === pos.id) {
+                    <tr class="edit-row">
+                      <td colspan="8">
+                        <div class="edit-panel">
+                          <div class="edit-field">
+                            <label>Stop Loss</label>
+                            <div class="edit-input-wrap">
+                              <input type="number" [(ngModel)]="editSL" [step]="0.00001" placeholder="Not set" />
+                              @if (editSL) {
+                                <button class="edit-clear" (click)="editSL = null">&times;</button>
+                              }
+                            </div>
+                          </div>
+                          <div class="edit-field">
+                            <label>Take Profit</label>
+                            <div class="edit-input-wrap">
+                              <input type="number" [(ngModel)]="editTP" [step]="0.00001" placeholder="Not set" />
+                              @if (editTP) {
+                                <button class="edit-clear" (click)="editTP = null">&times;</button>
+                              }
+                            </div>
+                          </div>
+                          <div class="edit-actions">
+                            <button class="edit-save" (click)="saveModify(pos.id)" [disabled]="modifying">
+                              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                                <polyline points="20 6 9 17 4 12"/>
+                              </svg>
+                              {{ modifying ? 'Saving...' : 'Save Changes' }}
+                            </button>
+                            <button class="edit-cancel" (click)="cancelModify()">Cancel</button>
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                  }
                 }
               </tbody>
             </table>
@@ -384,24 +442,220 @@ interface OrderResult {
     .buy, .buy-color { color: var(--success); }
     .sell, .sell-color { color: var(--danger); }
 
-    button.small {
-      padding: 4px 8px;
+    /* Symbol & Direction badges */
+    .symbol-badge {
+      font-weight: 700;
+      font-family: var(--font-mono);
+      font-size: 13px;
+      color: var(--text-bright);
+    }
+    .dir-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-weight: 600;
       font-size: 12px;
+      padding: 3px 8px;
+      border-radius: 4px;
+    }
+    .dir-icon {
+      width: 10px;
+      height: 10px;
+    }
+    .dir-buy {
+      color: #22c55e;
+      background: rgba(34, 197, 94, 0.1);
+    }
+    .dir-sell {
+      color: #ef4444;
+      background: rgba(239, 68, 68, 0.1);
+    }
+    .mono {
+      font-family: var(--font-mono);
+      font-size: 13px;
     }
 
-    .actions-cell {
+    /* SL / TP cell */
+    .sl-tp-cell {
       display: flex;
+      align-items: center;
       gap: 4px;
+      font-family: var(--font-mono);
+      font-size: 12px;
+    }
+    .sl-tp-sep {
+      color: var(--text-muted);
+      opacity: 0.4;
+    }
+    .sl-val { color: var(--text-muted); }
+    .tp-val { color: var(--text-muted); }
+    .sl-val.sl-set { color: #ef4444; }
+    .tp-val.tp-set { color: #22c55e; }
+
+    /* PnL badge */
+    .pnl-badge {
+      font-family: var(--font-mono);
+      font-weight: 600;
+      font-size: 13px;
+      padding: 2px 6px;
+      border-radius: 4px;
+    }
+    .pnl-pos {
+      color: #22c55e;
+      background: rgba(34, 197, 94, 0.08);
+    }
+    .pnl-neg {
+      color: #ef4444;
+      background: rgba(239, 68, 68, 0.08);
+    }
+
+    /* Action buttons */
+    .th-actions {
+      width: 90px;
+      text-align: center;
+    }
+    .actions-cell {
+      text-align: center;
+    }
+    .action-btns {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+    }
+    .act-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 32px;
+      height: 32px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--surface-light);
+      color: var(--text-muted);
+      cursor: pointer;
+      transition: all 0.15s;
+      padding: 0;
+    }
+    .act-btn svg {
+      width: 15px;
+      height: 15px;
+    }
+    .act-modify:hover, .act-modify.act-active {
+      background: rgba(59, 130, 246, 0.1);
+      border-color: rgba(59, 130, 246, 0.4);
+      color: #3b82f6;
+    }
+    .act-close:hover {
+      background: rgba(239, 68, 68, 0.1);
+      border-color: rgba(239, 68, 68, 0.4);
+      color: #ef4444;
+    }
+    .row-expanded {
+      border-bottom: none !important;
+    }
+    .row-expanded td {
+      border-bottom: none !important;
+    }
+
+    /* Edit row */
+    .edit-row td {
+      padding: 0 !important;
+      border-top: none !important;
+    }
+    .edit-panel {
+      display: flex;
+      align-items: flex-end;
+      gap: 16px;
+      padding: 12px 16px 16px;
+      background: var(--surface-light);
+      border-top: 1px dashed var(--border);
+    }
+    .edit-field {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      flex: 0 0 160px;
+    }
+    .edit-field label {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .edit-input-wrap {
+      position: relative;
+      display: flex;
       align-items: center;
     }
-
-    .inline-input {
-      width: 90px;
-      padding: 3px 6px;
-      font-size: 12px;
-      border: 1px solid var(--border);
-      border-radius: 3px;
+    .edit-input-wrap input {
+      width: 100%;
+      padding: 7px 28px 7px 10px;
+      font-size: 13px;
+      font-family: var(--font-mono);
       background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      color: var(--text);
+    }
+    .edit-input-wrap input:focus {
+      outline: none;
+      border-color: var(--primary);
+    }
+    .edit-clear {
+      position: absolute;
+      right: 6px;
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      font-size: 16px;
+      cursor: pointer;
+      padding: 0 4px;
+      line-height: 1;
+    }
+    .edit-clear:hover { color: var(--text); }
+    .edit-actions {
+      display: flex;
+      gap: 8px;
+      margin-left: auto;
+    }
+    .edit-save {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 7px 16px;
+      font-size: 13px;
+      font-weight: 600;
+      background: var(--primary);
+      color: white;
+      border: none;
+      border-radius: var(--radius);
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .edit-save svg {
+      width: 14px;
+      height: 14px;
+    }
+    .edit-save:hover { background: #2563eb; }
+    .edit-save:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    .edit-cancel {
+      padding: 7px 14px;
+      font-size: 13px;
+      font-weight: 500;
+      background: var(--surface);
+      color: var(--text-muted);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .edit-cancel:hover {
+      background: var(--surface-light);
       color: var(--text);
     }
 
@@ -727,13 +981,83 @@ interface OrderResult {
         width: 100%;
       }
 
-      .actions-cell {
-        display: block;
+      /* Mobile action buttons: full-width with text labels */
+      .action-btns {
+        display: flex;
+        gap: 8px;
+        width: 100%;
+      }
+      .act-btn {
+        width: auto;
+        height: 40px;
+        flex: 1;
+        border-radius: var(--radius);
+        font-size: 13px;
+        font-weight: 600;
+        gap: 6px;
+      }
+      .act-btn svg {
+        width: 14px;
+        height: 14px;
+      }
+      .act-modify::after {
+        content: 'Modify';
+      }
+      .act-close::after {
+        content: 'Close';
+      }
+      .act-modify {
+        border-color: rgba(59, 130, 246, 0.3);
+        color: #3b82f6;
+        background: rgba(59, 130, 246, 0.08);
+      }
+      .act-close {
+        border-color: rgba(239, 68, 68, 0.3);
+        color: #ef4444;
+        background: rgba(239, 68, 68, 0.08);
       }
 
-      .inline-input {
-        width: 100%;
-        min-width: 0;
+      /* Edit row: merge with position card above */
+      .row-expanded {
+        border-bottom-left-radius: 0 !important;
+        border-bottom-right-radius: 0 !important;
+        margin-bottom: 0 !important;
+        border-bottom: none !important;
+      }
+      .edit-row {
+        display: block !important;
+        border: 1px solid var(--border) !important;
+        border-top: none !important;
+        border-radius: 0 0 var(--radius-lg) var(--radius-lg) !important;
+        margin-bottom: 12px !important;
+        padding: 0 !important;
+        background: var(--surface) !important;
+      }
+      .edit-row td {
+        display: block !important;
+        padding: 0 !important;
+        border: none !important;
+      }
+      .edit-row td::before {
+        display: none !important;
+      }
+      .edit-panel {
+        flex-direction: column;
+        align-items: stretch;
+        border-top: 1px dashed var(--border);
+        border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+      }
+      .edit-field {
+        flex: 1 1 auto;
+      }
+      .edit-actions {
+        margin-left: 0;
+        flex-direction: row;
+      }
+      .edit-save, .edit-cancel {
+        flex: 1;
+        text-align: center;
+        justify-content: center;
       }
     }
 
@@ -797,6 +1121,9 @@ export class PositionsComponent implements OnInit, OnDestroy {
 
   private priceSub: Subscription | null = null;
   private subscribedSymbol: string | null = null;
+  private positionSub: Subscription | null = null;
+  private positionPriceSubs: Subscription[] = [];
+  private positionSubscribedSymbols: string[] = [];
 
   // Symbol autocomplete state
   symbolSearch = '';
@@ -813,10 +1140,24 @@ export class PositionsComponent implements OnInit, OnDestroy {
   ngOnInit() {
     this.loadPositions();
     this.loadHistory();
+
+    // Subscribe to live position updates from SignalR
+    // Note: SignalR sends cTraderPositionId, not DB id
+    this.positionSub = this.signalR.positions$.subscribe(updates => {
+      for (const update of updates) {
+        const pos = this.positions.find(p => p.cTraderPositionId === update.positionId);
+        if (pos) {
+          pos.currentPrice = update.currentPrice;
+          pos.unrealizedPnL = update.pnL;
+        }
+      }
+    });
   }
 
   ngOnDestroy() {
     this.cleanupPriceSub();
+    this.positionSub?.unsubscribe();
+    this.cleanupPositionSubs();
   }
 
   get priceStep(): number {
@@ -1027,11 +1368,51 @@ export class PositionsComponent implements OnInit, OnDestroy {
       next: (data) => {
         this.positions = data;
         this.loading = false;
+        this.subscribeToPositionPrices();
       },
       error: () => {
         this.loading = false;
       }
     });
+  }
+
+  private subscribeToPositionPrices() {
+    // Clean up previous position price subscriptions
+    this.cleanupPositionSubs();
+
+    // Get unique symbols from open positions
+    const symbols = [...new Set(this.positions.map(p => p.symbol))];
+
+    for (const symbol of symbols) {
+      this.signalR.subscribeToSymbol(symbol);
+      this.positionSubscribedSymbols.push(symbol);
+    }
+
+    if (symbols.length > 0) {
+      const sub = this.signalR.priceUpdates$.subscribe(prices => {
+        for (const pos of this.positions) {
+          const price = prices.get(pos.symbol);
+          if (price) {
+            pos.currentPrice = pos.direction === 'Buy' ? price.bid : price.ask;
+          }
+        }
+      });
+      this.positionPriceSubs.push(sub);
+    }
+  }
+
+  private cleanupPositionSubs() {
+    for (const sub of this.positionPriceSubs) {
+      sub.unsubscribe();
+    }
+    this.positionPriceSubs = [];
+    for (const sym of this.positionSubscribedSymbols) {
+      // Only unsubscribe if it's not the currently-selected trade form symbol
+      if (sym !== this.subscribedSymbol) {
+        this.signalR.unsubscribeFromSymbol(sym);
+      }
+    }
+    this.positionSubscribedSymbols = [];
   }
 
   loadHistory() {

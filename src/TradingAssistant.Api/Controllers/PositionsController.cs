@@ -43,7 +43,8 @@ public class PositionsController : ControllerBase
             .OrderByDescending(p => p.OpenTime)
             .ToListAsync();
 
-        return positions.Select(ToDto).ToList();
+        var contractSizes = await GetContractSizesAsync(positions.Select(p => p.Symbol));
+        return positions.Select(p => ToDto(p, contractSizes.GetValueOrDefault(p.Symbol, 100_000m))).ToList();
     }
 
     [HttpGet("{id}")]
@@ -53,7 +54,8 @@ public class PositionsController : ControllerBase
         if (position is null)
             return NotFound();
 
-        return ToDto(position);
+        var cs = await GetContractSizeAsync(position.Symbol);
+        return ToDto(position, cs);
     }
 
     [HttpGet("history")]
@@ -78,7 +80,8 @@ public class PositionsController : ControllerBase
             .Take(limit)
             .ToListAsync();
 
-        return positions.Select(ToDto).ToList();
+        var contractSizes = await GetContractSizesAsync(positions.Select(p => p.Symbol));
+        return positions.Select(p => ToDto(p, contractSizes.GetValueOrDefault(p.Symbol, 100_000m))).ToList();
     }
 
     [HttpPost("{id}/close")]
@@ -140,10 +143,20 @@ public class PositionsController : ControllerBase
             .Where(p => p.Status == PositionStatus.Open)
             .ToListAsync();
 
+        // Look up contract sizes for margin calculation
+        var symbols = openPositions.Select(p => p.Symbol).Distinct().ToList();
+        var contractSizes = await _db.Symbols
+            .Where(s => symbols.Contains(s.Name) && s.IsActive)
+            .ToDictionaryAsync(s => s.Name, s => s.ContractSize > 0 ? s.ContractSize : 100_000m);
+
         var unrealizedPnL = openPositions.Sum(p => p.UnrealizedPnL);
         var equity = account.Equity > 0 ? account.Equity : account.Balance + unrealizedPnL;
         var leverage = account.Leverage > 0 ? account.Leverage : 1;
-        var usedMargin = openPositions.Sum(p => p.Volume * 100_000m * p.EntryPrice / leverage);
+        var usedMargin = openPositions.Sum(p =>
+        {
+            var cs = contractSizes.GetValueOrDefault(p.Symbol, 100_000m);
+            return p.Volume * cs * p.EntryPrice / leverage;
+        });
         var freeMargin = equity - usedMargin;
 
         return new AccountInfo(
@@ -175,19 +188,23 @@ public class PositionsController : ControllerBase
     {
         var raw = await _db.Symbols
             .Where(s => s.IsActive)
-            .Select(s => new { s.Name, s.BaseCurrency, s.QuoteCurrency, s.Description, s.MinVolume, s.MaxVolume, s.VolumeStep, s.Digits })
+            .Select(s => new { s.Name, s.BaseCurrency, s.QuoteCurrency, s.Description, s.MinVolume, s.MaxVolume, s.VolumeStep, s.Digits, s.ContractSize })
             .ToListAsync();
 
-        // Convert from cTrader volume units (100,000 = 1 lot) to lots for the UI
+        // Convert from cTrader volume units to lots using each symbol's contract size
         var symbols = raw
-            .Select(s => new SymbolInfo(
-                s.Name,
-                s.MinVolume / 100_000m,
-                s.MaxVolume / 100_000m,
-                s.VolumeStep / 100_000m,
-                s.Digits,
-                SymbolCategorizer.Categorize(s.Name, s.BaseCurrency, s.QuoteCurrency),
-                string.IsNullOrWhiteSpace(s.Description) ? $"{s.BaseCurrency}/{s.QuoteCurrency}" : s.Description))
+            .Select(s =>
+            {
+                var cs = s.ContractSize > 0 ? s.ContractSize : 100_000m;
+                return new SymbolInfo(
+                    s.Name,
+                    CTraderConversions.DbVolumeToLots(s.MinVolume, cs),
+                    CTraderConversions.DbVolumeToLots(s.MaxVolume, cs),
+                    CTraderConversions.DbVolumeToLots(s.VolumeStep, cs),
+                    s.Digits,
+                    SymbolCategorizer.Categorize(s.Name, s.BaseCurrency, s.QuoteCurrency),
+                    string.IsNullOrWhiteSpace(s.Description) ? $"{s.BaseCurrency}/{s.QuoteCurrency}" : s.Description);
+            })
             .OrderBy(s => s.Category)
             .ThenBy(s => s.Name)
             .ToList();
@@ -221,9 +238,10 @@ public class PositionsController : ControllerBase
         var symbolInfo = await _db.Symbols.FirstOrDefaultAsync(s => s.Name == request.Symbol && s.IsActive);
         if (symbolInfo != null)
         {
-            var minLot = symbolInfo.MinVolume / 100_000m;
-            var maxLot = symbolInfo.MaxVolume / 100_000m;
-            var volumeStep = symbolInfo.VolumeStep / 100_000m;
+            var cs = symbolInfo.ContractSize > 0 ? symbolInfo.ContractSize : 100_000m;
+            var minLot = CTraderConversions.DbVolumeToLots(symbolInfo.MinVolume, cs);
+            var maxLot = CTraderConversions.DbVolumeToLots(symbolInfo.MaxVolume, cs);
+            var volumeStep = CTraderConversions.DbVolumeToLots(symbolInfo.VolumeStep, cs);
 
             if (request.Volume < minLot)
                 return BadRequest(new { error = $"Volume {request.Volume} below minimum {minLot} lots" });
@@ -282,10 +300,24 @@ public class PositionsController : ControllerBase
         return Ok(result);
     }
 
-    private static PositionDto ToDto(Position p)
+    private async Task<Dictionary<string, decimal>> GetContractSizesAsync(IEnumerable<string> symbols)
     {
-        // Notional = lots * contract size (100,000) * entry price
-        var notionalUsd = p.Volume * 100_000m * p.EntryPrice;
+        var distinctSymbols = symbols.Distinct().ToList();
+        return await _db.Symbols
+            .Where(s => distinctSymbols.Contains(s.Name) && s.IsActive)
+            .ToDictionaryAsync(s => s.Name, s => s.ContractSize > 0 ? s.ContractSize : 100_000m);
+    }
+
+    private async Task<decimal> GetContractSizeAsync(string symbol)
+    {
+        var s = await _db.Symbols.FirstOrDefaultAsync(s => s.Name == symbol && s.IsActive);
+        return s?.ContractSize > 0 ? s.ContractSize : 100_000m;
+    }
+
+    private static PositionDto ToDto(Position p, decimal contractSize = 100_000m)
+    {
+        // Notional = lots × contractSize × entry price
+        var notionalUsd = p.Volume * contractSize * p.EntryPrice;
         return new PositionDto(
             p.Id, p.CTraderPositionId, p.AccountId, p.Symbol,
             p.Direction.ToString(), p.Volume, notionalUsd,

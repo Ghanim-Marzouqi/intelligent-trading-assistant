@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using TradingAssistant.Api.Data;
+using TradingAssistant.Api.Services.CTrader;
 
 namespace TradingAssistant.Api.Services.Orders;
 
@@ -31,11 +32,12 @@ public class PositionSizer : IPositionSizer
         if (account is null)
             throw new InvalidOperationException("No active account found");
 
-        // Get symbol volume constraints from DB (already stored in lots)
+        // Get symbol volume constraints from DB (stored in cTrader volume units)
         var symbolInfo = await _db.Symbols.FirstOrDefaultAsync(s => s.Name == symbol && s.IsActive);
-        var minLot = symbolInfo?.MinVolume ?? 0.01m;
-        var maxLot = symbolInfo?.MaxVolume ?? 100m;
-        var volumeStep = symbolInfo?.VolumeStep ?? 0.01m;
+        var contractSize = symbolInfo?.ContractSize > 0 ? symbolInfo.ContractSize : 100_000m;
+        var minLot = CTraderConversions.DbVolumeToLots(symbolInfo?.MinVolume ?? 1000m, contractSize);
+        var maxLot = CTraderConversions.DbVolumeToLots(symbolInfo?.MaxVolume ?? 10_000_000m, contractSize);
+        var volumeStep = CTraderConversions.DbVolumeToLots(symbolInfo?.VolumeStep ?? 1000m, contractSize);
 
         var accountBalance = account.Balance;
         var riskAmount = accountBalance * (riskPercent / 100m);
@@ -52,9 +54,34 @@ public class PositionSizer : IPositionSizer
         // Calculate pips at risk
         var pipsAtRisk = slDistance / pipSize;
 
-        // Calculate lot size
+        // Calculate lot size from risk
         // Formula: Lot Size = Risk Amount / (Pips at Risk × Pip Value)
         var lotSize = riskAmount / (pipsAtRisk * pipValue);
+
+        // Also cap lot size to what available margin can support
+        var leverage = account.Leverage > 0 ? account.Leverage : 100;
+        var freeMargin = account.FreeMargin > 0 ? account.FreeMargin
+            : account.Equity > 0 ? account.Equity - account.Margin
+            : account.Balance;
+
+        // Use 80% of free margin as cap to leave headroom
+        var marginBudget = freeMargin * 0.8m;
+        if (contractSize > 0 && entryPrice > 0)
+        {
+            var marginPerLot = contractSize * entryPrice / leverage;
+            if (marginPerLot > 0)
+            {
+                var maxLotByMargin = marginBudget / marginPerLot;
+                maxLotByMargin = RoundToLotStep(maxLotByMargin, volumeStep);
+                if (maxLotByMargin < lotSize)
+                {
+                    _logger.LogWarning(
+                        "Margin cap: {Symbol} risk-based={RiskLots} lots, margin-capped={MarginLots} lots (freeMargin={FreeMargin}, marginPerLot={MarginPerLot}, leverage={Leverage})",
+                        symbol, lotSize, maxLotByMargin, freeMargin, marginPerLot, leverage);
+                    lotSize = maxLotByMargin;
+                }
+            }
+        }
 
         // Round to broker's lot step and clamp to min/max
         var rawLotSize = RoundToLotStep(lotSize, volumeStep);
@@ -68,8 +95,8 @@ public class PositionSizer : IPositionSizer
         }
 
         _logger.LogInformation(
-            "Position size calculated: {Symbol} Risk={RiskPercent}% SL={SlDistance} pips → {LotSize} lots (min={MinLot}, max={MaxLot}, step={Step})",
-            symbol, riskPercent, pipsAtRisk, lotSize, minLot, maxLot, volumeStep);
+            "Position size calculated: {Symbol} Risk={RiskPercent}% SL={SlDistance} pips → {LotSize} lots (min={MinLot}, max={MaxLot}, step={Step}, freeMargin={FreeMargin})",
+            symbol, riskPercent, pipsAtRisk, lotSize, minLot, maxLot, volumeStep, freeMargin);
 
         return lotSize;
     }
@@ -96,12 +123,19 @@ public class PositionSizer : IPositionSizer
 
     private decimal GetPipValue(string symbol, string accountCurrency)
     {
-        // Simplified pip value calculation
-        // In reality, this needs to account for cross rates
-        if (symbol.EndsWith(accountCurrency))
-            return 10m; // Standard lot pip value for USD account with USD quote currency
+        // Pip value per standard lot (1 lot)
+        // For crypto: 1 pip move on 1 lot = contractSize * pipSize in quote currency
+        // For forex pairs where quote = account currency: $10 per pip per lot
+        if (IsCrypto(symbol))
+            return 1m; // 1 lot crypto = 1 unit, pip = $1 for USD-quoted
 
-        // USD-only account: standard lot pip value is $10
+        if (symbol.Contains("XAU") || symbol.Contains("GOLD"))
+            return 10m; // Gold: $10 per 0.1 pip per lot
+
+        if (symbol.Contains("XAG") || symbol.Contains("SILVER"))
+            return 50m;
+
+        // Standard forex: $10 per pip per standard lot
         return 10m;
     }
 
@@ -113,7 +147,16 @@ public class PositionSizer : IPositionSizer
         if (symbol.Contains("XAU") || symbol.Contains("GOLD"))
             return 0.1m;
 
-        return 0.0001m;
+        if (IsCrypto(symbol))
+            return 1.0m; // Crypto: 1 pip = $1
+
+        return 0.0001m; // Standard forex
+    }
+
+    private static bool IsCrypto(string symbol)
+    {
+        var cryptoBases = new[] { "BTC", "ETH", "LTC", "XRP", "BCH", "ADA", "DOT", "SOL", "DOGE", "BNB", "AVAX", "LINK", "MATIC" };
+        return cryptoBases.Any(c => symbol.StartsWith(c, StringComparison.OrdinalIgnoreCase));
     }
 
     private decimal RoundToLotStep(decimal lotSize, decimal volumeStep)

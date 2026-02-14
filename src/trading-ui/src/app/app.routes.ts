@@ -38,6 +38,11 @@ export const routes: Routes = [
     canActivate: [authGuard]
   },
   {
+    path: 'charts',
+    loadComponent: () => import('./charts/charts.component').then(m => m.ChartsComponent),
+    canActivate: [authGuard]
+  },
+  {
     path: 'watchlist',
     loadComponent: () => import('./watchlist/watchlist.component').then(m => m.WatchlistComponent),
     canActivate: [authGuard]

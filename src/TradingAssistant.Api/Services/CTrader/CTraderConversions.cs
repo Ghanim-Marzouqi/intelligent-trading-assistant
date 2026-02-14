@@ -3,16 +3,26 @@ namespace TradingAssistant.Api.Services.CTrader;
 public static class CTraderConversions
 {
     /// <summary>
-    /// Convert cTrader volume units to lots (100,000 units = 1 standard lot).
+    /// Convert cTrader volume to lots using the symbol's contract size.
+    /// cTrader volume = quantity_in_base_currency × 100, so:
+    /// lots = volume / (contractSize × 100).
     /// </summary>
-    public static decimal CentsToLots(long volumeInCents)
-        => volumeInCents / 100_000m;
+    public static decimal VolumeToLots(long volume, decimal contractSize)
+        => contractSize > 0 ? volume / (contractSize * 100m) : volume / 100_000m;
 
     /// <summary>
-    /// Convert lots to cTrader volume units (1 lot = 100,000 units).
+    /// Convert lots to cTrader volume using the symbol's contract size.
+    /// cTrader volume = lots × contractSize × 100.
     /// </summary>
-    public static long LotsToCents(decimal lots)
-        => (long)(lots * 100_000m);
+    public static long LotsToVolume(decimal lots, decimal contractSize)
+        => (long)(lots * contractSize * 100m);
+
+    /// <summary>
+    /// Convert a cTrader min/max/step volume to lots using the symbol's contract size.
+    /// Same formula as VolumeToLots but accepts decimal input for DB-stored values.
+    /// </summary>
+    public static decimal DbVolumeToLots(decimal volume, decimal contractSize)
+        => contractSize > 0 ? volume / (contractSize * 100m) : volume / 100_000m;
 
     /// <summary>
     /// Convert a cTrader money value (balance, commission, swap, profit) to decimal.

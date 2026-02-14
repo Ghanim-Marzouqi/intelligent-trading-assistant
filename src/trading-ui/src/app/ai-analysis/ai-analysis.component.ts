@@ -1,10 +1,12 @@
-import { Component, DestroyRef, ElementRef, HostListener, inject, OnInit } from '@angular/core';
+import { Component, DestroyRef, ElementRef, HostListener, inject, OnInit, OnDestroy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { HttpClient } from '@angular/common/http';
+import { Subscription } from 'rxjs';
 import { environment } from '../../environments/environment';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { TradeChartComponent, CandleData, TradeLevels } from './trade-chart.component';
+import { SignalRService } from '../shared/services/signalr.service';
 
 interface SymbolInfo {
   name: string;
@@ -185,7 +187,7 @@ interface TradeReview {
             <!-- Candlestick Chart -->
             @if (candles.length > 0) {
               <div class="chart-wrapper">
-                <app-trade-chart [candles]="candles" [tradeLevels]="tradeLevels"></app-trade-chart>
+                <app-trade-chart [candles]="candles" [tradeLevels]="tradeLevels" [livePrice]="liveChartPrice" [timeframe]="timeframe"></app-trade-chart>
               </div>
             } @else if (loadingCandles) {
               <div class="chart-loading">
@@ -428,7 +430,7 @@ interface TradeReview {
                   Risk Events
                 </div>
                 <div class="risk-tags">
-                  @for (event of analysis.riskEvents; track event) {
+                  @for (event of analysis.riskEvents; track $index) {
                     <span class="risk-tag">{{ event }}</span>
                   }
                 </div>
@@ -495,7 +497,7 @@ interface TradeReview {
                     Strengths
                   </h4>
                   <ul>
-                    @for (s of review.strengths; track s) {
+                    @for (s of review.strengths; track $index) {
                       <li>{{ s }}</li>
                     }
                   </ul>
@@ -509,7 +511,7 @@ interface TradeReview {
                     Weaknesses
                   </h4>
                   <ul>
-                    @for (w of review.weaknesses; track w) {
+                    @for (w of review.weaknesses; track $index) {
                       <li>{{ w }}</li>
                     }
                   </ul>
@@ -524,7 +526,7 @@ interface TradeReview {
                   Improvements
                 </h4>
                 <ul>
-                  @for (imp of review.improvements; track imp) {
+                  @for (imp of review.improvements; track $index) {
                     <li>{{ imp }}</li>
                   }
                 </ul>
@@ -1636,7 +1638,7 @@ interface TradeReview {
     }
   `]
 })
-export class AiAnalysisComponent implements OnInit {
+export class AiAnalysisComponent implements OnInit, OnDestroy {
   symbol = '';
   timeframe = 'H4';
   tradeId: number | null = null;
@@ -1650,6 +1652,7 @@ export class AiAnalysisComponent implements OnInit {
   analysisError = '';
   candles: CandleData[] = [];
   tradeLevels: TradeLevels | null = null;
+  liveChartPrice: { bid: number; ask: number; timestamp: Date } | null = null;
 
   // Trade form state
   showTradeForm = false;
@@ -1665,6 +1668,9 @@ export class AiAnalysisComponent implements OnInit {
   };
 
   private destroyRef = inject(DestroyRef);
+  private signalR = inject(SignalRService);
+  private priceSub: Subscription | null = null;
+  private subscribedSymbol: string | null = null;
 
   // Symbol autocomplete state
   symbols: SymbolInfo[] = [];
@@ -1783,6 +1789,35 @@ export class AiAnalysisComponent implements OnInit {
     return 'var(--success)';
   }
 
+  ngOnDestroy() {
+    this.cleanupPriceSub();
+  }
+
+  private cleanupPriceSub() {
+    if (this.priceSub) {
+      this.priceSub.unsubscribe();
+      this.priceSub = null;
+    }
+    if (this.subscribedSymbol) {
+      this.signalR.unsubscribeFromSymbol(this.subscribedSymbol);
+      this.subscribedSymbol = null;
+    }
+    this.liveChartPrice = null;
+  }
+
+  private subscribeToLivePrices() {
+    if (!this.symbol) return;
+
+    this.signalR.subscribeToSymbol(this.symbol);
+    this.subscribedSymbol = this.symbol;
+    this.priceSub = this.signalR.priceUpdates$.subscribe(prices => {
+      const price = prices.get(this.symbol);
+      if (price) {
+        this.liveChartPrice = { bid: price.bid, ask: price.ask, timestamp: price.timestamp };
+      }
+    });
+  }
+
   analyze() {
     if (!this.symbol) return;
     this.analyzing = true;
@@ -1792,6 +1827,7 @@ export class AiAnalysisComponent implements OnInit {
     this.showTradeForm = false;
     this.submittingTrade = false;
     this.tradeResult = null;
+    this.cleanupPriceSub();
     this.http.get<MarketAnalysis>(
       `${environment.apiUrl}/api/ai/analyze/${this.symbol}?timeframe=${this.timeframe}`
     )
@@ -1831,6 +1867,7 @@ export class AiAnalysisComponent implements OnInit {
       next: (data) => {
         this.candles = data;
         this.loadingCandles = false;
+        this.subscribeToLivePrices();
       },
       error: () => {
         this.loadingCandles = false;

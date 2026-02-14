@@ -160,11 +160,12 @@ public class CTraderOrderExecutor : ICTraderOrderExecutor
             if (position is null)
                 return new OrderResult { Success = false, ErrorMessage = "Position not found" };
 
+            var contractSize = _symbolResolver.GetContractSize(position.Symbol);
             var req = new ProtoOAClosePositionReq
             {
                 CtidTraderAccountId = accountId,
                 PositionId = positionId,
-                Volume = CTraderConversions.LotsToCents(position.Volume)
+                Volume = CTraderConversions.LotsToVolume(position.Volume, contractSize)
             };
 
             // Subscribe BEFORE sending to avoid race condition
@@ -275,13 +276,14 @@ public class CTraderOrderExecutor : ICTraderOrderExecutor
                 ? ProtoOATradeSide.Buy
                 : ProtoOATradeSide.Sell;
 
+            var contractSize = _symbolResolver.GetContractSize(symbol);
             var req = new ProtoOANewOrderReq
             {
                 CtidTraderAccountId = accountId,
                 SymbolId = symbolId,
                 OrderType = orderType,
                 TradeSide = tradeSide,
-                Volume = CTraderConversions.LotsToCents(volume)
+                Volume = CTraderConversions.LotsToVolume(volume, contractSize)
             };
 
             if (limitPrice.HasValue)
@@ -318,8 +320,8 @@ public class CTraderOrderExecutor : ICTraderOrderExecutor
                 .FirstAsync()
                 .ToTask();
 
-            _logger.LogDebug("Sending {OrderType} order for {Symbol} (ID={SymbolId}), volume={Volume} cents",
-                orderType, symbol, symbolId, CTraderConversions.LotsToCents(volume));
+            _logger.LogDebug("Sending {OrderType} order for {Symbol} (ID={SymbolId}), volume={Volume} (cTrader units), contractSize={ContractSize}",
+                orderType, symbol, symbolId, CTraderConversions.LotsToVolume(volume, contractSize), contractSize);
 
             await client.SendMessage(req, ProtoOAPayloadType.ProtoOaNewOrderReq);
 

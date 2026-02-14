@@ -56,10 +56,15 @@ export class TradeChartComponent implements AfterViewInit, OnDestroy, OnChanges 
   @ViewChild('chartContainer') chartContainer!: ElementRef<HTMLDivElement>;
   @Input() candles: CandleData[] = [];
   @Input() tradeLevels: TradeLevels | null = null;
+  @Input() livePrice: { bid: number; ask: number; timestamp: Date } | null = null;
+  @Input() timeframe: string = 'H1';
 
   private chart: IChartApi | null = null;
   private candleSeries: ISeriesApi<'Candlestick'> | null = null;
   private resizeObserver: ResizeObserver | null = null;
+
+  private currentCandleTime = 0;
+  private currentCandle: CandlestickData<Time> | null = null;
 
   ngAfterViewInit() {
     this.createChart();
@@ -73,6 +78,9 @@ export class TradeChartComponent implements AfterViewInit, OnDestroy, OnChanges 
     }
     if (changes['tradeLevels']) {
       this.updateTradeLevels();
+    }
+    if (changes['livePrice'] && this.livePrice && this.candleSeries) {
+      this.updateLiveCandle();
     }
   }
 
@@ -143,6 +151,50 @@ export class TradeChartComponent implements AfterViewInit, OnDestroy, OnChanges 
 
     this.candleSeries.setData(data);
     this.chart?.timeScale().fitContent();
+
+    // Track the last candle for live updates
+    if (data.length > 0) {
+      const last = data[data.length - 1];
+      this.currentCandleTime = last.time as number;
+      this.currentCandle = { ...last };
+    }
+  }
+
+  private updateLiveCandle() {
+    if (!this.livePrice || !this.candleSeries) return;
+
+    const mid = (this.livePrice.bid + this.livePrice.ask) / 2;
+    const tickTime = Math.floor(new Date(this.livePrice.timestamp).getTime() / 1000);
+    const candleTime = this.floorToTimeframe(tickTime);
+
+    if (candleTime === this.currentCandleTime && this.currentCandle) {
+      this.currentCandle.close = mid;
+      this.currentCandle.high = Math.max(this.currentCandle.high, mid);
+      this.currentCandle.low = Math.min(this.currentCandle.low, mid);
+      this.candleSeries.update(this.currentCandle);
+    } else if (candleTime > this.currentCandleTime) {
+      this.currentCandleTime = candleTime;
+      this.currentCandle = {
+        time: candleTime as Time,
+        open: mid,
+        high: mid,
+        low: mid,
+        close: mid,
+      };
+      this.candleSeries.update(this.currentCandle);
+    }
+  }
+
+  private floorToTimeframe(timestamp: number): number {
+    let duration: number;
+    switch (this.timeframe) {
+      case 'M15': duration = 15 * 60; break;
+      case 'H1': duration = 60 * 60; break;
+      case 'H4': duration = 4 * 60 * 60; break;
+      case 'D1': duration = 24 * 60 * 60; break;
+      default: duration = 60 * 60;
+    }
+    return Math.floor(timestamp / duration) * duration;
   }
 
   private updateTradeLevels() {

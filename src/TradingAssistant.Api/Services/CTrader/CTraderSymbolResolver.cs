@@ -15,6 +15,8 @@ public interface ICTraderSymbolResolver
     string GetSymbolName(long symbolId);
     int GetDigits(long symbolId);
     int GetDigits(string symbolName);
+    decimal GetContractSize(string symbolName);
+    decimal GetContractSize(long symbolId);
     bool TryGetSymbolId(string symbolName, out long symbolId);
     string GetAssetName(long assetId);
     bool IsInitialized { get; }
@@ -28,6 +30,8 @@ public class CTraderSymbolResolver : ICTraderSymbolResolver
     private readonly ConcurrentDictionary<string, long> _nameToId = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<long, string> _idToName = new();
     private readonly ConcurrentDictionary<long, int> _idToDigits = new();
+    private readonly ConcurrentDictionary<long, decimal> _idToContractSize = new();
+    private readonly ConcurrentDictionary<string, decimal> _nameToContractSize = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<long, string> _assetIdToName = new();
 
     private bool _initialized;
@@ -109,10 +113,14 @@ public class CTraderSymbolResolver : ICTraderSymbolResolver
             allDetails.AddRange(detailRes.Symbol);
         }
 
-        // Step 3: Cache digits and upsert to DB
+        // Step 3: Cache digits and contract sizes, then upsert to DB
         foreach (var detail in allDetails)
         {
             _idToDigits[detail.SymbolId] = detail.Digits;
+            var contractSize = detail.HasLotSize ? detail.LotSize / 100m : 100_000m;
+            _idToContractSize[detail.SymbolId] = contractSize;
+            if (_idToName.TryGetValue(detail.SymbolId, out var name))
+                _nameToContractSize[name] = contractSize;
         }
 
         await UpsertSymbolsToDbAsync(lightSymbols, allDetails, ct);
@@ -149,6 +157,20 @@ public class CTraderSymbolResolver : ICTraderSymbolResolver
         return 5;
     }
 
+    public decimal GetContractSize(long symbolId)
+    {
+        if (_idToContractSize.TryGetValue(symbolId, out var cs))
+            return cs;
+        return 100_000m; // safe default for forex
+    }
+
+    public decimal GetContractSize(string symbolName)
+    {
+        if (_nameToContractSize.TryGetValue(symbolName, out var cs))
+            return cs;
+        return 100_000m;
+    }
+
     public bool TryGetSymbolId(string symbolName, out long symbolId)
         => _nameToId.TryGetValue(symbolName, out symbolId);
 
@@ -158,6 +180,9 @@ public class CTraderSymbolResolver : ICTraderSymbolResolver
             return name;
         return "USD"; // safe default
     }
+
+    private string ResolveAssetName(long assetId)
+        => _assetIdToName.TryGetValue(assetId, out var name) ? name : "";
 
     private async Task UpsertSymbolsToDbAsync(
         List<ProtoOALightSymbol> lightSymbols,
@@ -180,10 +205,15 @@ public class CTraderSymbolResolver : ICTraderSymbolResolver
 
             detailMap.TryGetValue(ls.SymbolId, out var detail);
 
+            var baseCurrency = ls.HasBaseAssetId ? ResolveAssetName(ls.BaseAssetId) : "";
+            var quoteCurrency = ls.HasQuoteAssetId ? ResolveAssetName(ls.QuoteAssetId) : "";
+
             if (existingByCtraderId.TryGetValue(ls.SymbolId, out var existing))
             {
                 existing.Name = ls.SymbolName;
                 existing.Description = ls.Description ?? ls.SymbolName;
+                existing.BaseCurrency = baseCurrency;
+                existing.QuoteCurrency = quoteCurrency;
                 existing.IsActive = ls.Enabled;
                 existing.UpdatedAt = DateTime.UtcNow;
 
@@ -192,9 +222,9 @@ public class CTraderSymbolResolver : ICTraderSymbolResolver
                     existing.Digits = detail.Digits;
                     existing.PipSize = (decimal)Math.Pow(10, -detail.PipPosition);
                     existing.ContractSize = detail.HasLotSize ? detail.LotSize / 100m : 100000m;
-                    existing.MinVolume = detail.HasMinVolume ? detail.MinVolume / 100m : 0.01m;
-                    existing.MaxVolume = detail.HasMaxVolume ? detail.MaxVolume / 100m : 100m;
-                    existing.VolumeStep = detail.HasStepVolume ? detail.StepVolume / 100m : 0.01m;
+                    existing.MinVolume = detail.HasMinVolume ? detail.MinVolume : 1000m;
+                    existing.MaxVolume = detail.HasMaxVolume ? detail.MaxVolume : 10_000_000m;
+                    existing.VolumeStep = detail.HasStepVolume ? detail.StepVolume : 1000m;
                 }
             }
             else
@@ -204,6 +234,8 @@ public class CTraderSymbolResolver : ICTraderSymbolResolver
                     CTraderSymbolId = ls.SymbolId,
                     Name = ls.SymbolName,
                     Description = ls.Description ?? ls.SymbolName,
+                    BaseCurrency = baseCurrency,
+                    QuoteCurrency = quoteCurrency,
                     IsActive = ls.Enabled,
                     CreatedAt = DateTime.UtcNow,
                     Digits = detail?.Digits ?? 5,
@@ -214,14 +246,14 @@ public class CTraderSymbolResolver : ICTraderSymbolResolver
                         ? detail.LotSize / 100m
                         : 100000m,
                     MinVolume = detail is not null && detail.HasMinVolume
-                        ? detail.MinVolume / 100m
-                        : 0.01m,
+                        ? detail.MinVolume
+                        : 1000m,
                     MaxVolume = detail is not null && detail.HasMaxVolume
-                        ? detail.MaxVolume / 100m
-                        : 100m,
+                        ? detail.MaxVolume
+                        : 10_000_000m,
                     VolumeStep = detail is not null && detail.HasStepVolume
-                        ? detail.StepVolume / 100m
-                        : 0.01m
+                        ? detail.StepVolume
+                        : 1000m
                 };
 
                 db.Symbols.Add(symbol);

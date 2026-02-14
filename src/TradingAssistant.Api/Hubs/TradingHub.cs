@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.SignalR;
+using TradingAssistant.Api.Services.CTrader;
 
 namespace TradingAssistant.Api.Hubs;
 
@@ -10,16 +11,19 @@ public interface ITradingHubClient
     Task ReceivePositionUpdate(PositionUpdate position);
     Task ReceiveAccountUpdate(AccountUpdate account);
     Task ReceiveTradeExecuted(TradeNotification trade);
+    Task ReceiveMarginWarning(MarginWarning warning);
 }
 
 [Authorize]
 public class TradingHub : Hub<ITradingHubClient>
 {
     private readonly ILogger<TradingHub> _logger;
+    private readonly ICTraderPriceStream _priceStream;
 
-    public TradingHub(ILogger<TradingHub> logger)
+    public TradingHub(ILogger<TradingHub> logger, ICTraderPriceStream priceStream)
     {
         _logger = logger;
+        _priceStream = priceStream;
     }
 
     public override async Task OnConnectedAsync()
@@ -37,6 +41,10 @@ public class TradingHub : Hub<ITradingHubClient>
     public async Task SubscribeToSymbol(string symbol)
     {
         await Groups.AddToGroupAsync(Context.ConnectionId, $"symbol:{symbol}");
+
+        // Ensure the cTrader price stream is subscribed to this symbol's spot feed
+        await _priceStream.SubscribeAsync(symbol);
+
         _logger.LogDebug("Client {ConnectionId} subscribed to {Symbol}", Context.ConnectionId, symbol);
     }
 
@@ -50,5 +58,6 @@ public class TradingHub : Hub<ITradingHubClient>
 public record PriceUpdate(string Symbol, decimal Bid, decimal Ask, DateTime Timestamp);
 public record AlertNotification(long AlertId, string Symbol, string Message, string Severity, DateTime TriggeredAt, string? AiEnrichment = null);
 public record PositionUpdate(long PositionId, string Symbol, string Direction, decimal Volume, decimal EntryPrice, decimal CurrentPrice, decimal PnL);
-public record AccountUpdate(decimal Balance, decimal Equity, decimal Margin, decimal FreeMargin, decimal MarginLevel);
+public record AccountUpdate(decimal Balance, decimal Equity, decimal UnrealizedPnL, decimal Margin, decimal FreeMargin, decimal MarginLevel);
 public record TradeNotification(long TradeId, string Symbol, string Direction, decimal Volume, decimal EntryPrice, decimal? ExitPrice, decimal PnL);
+public record MarginWarning(string Level, decimal MarginLevel, decimal Equity, decimal UsedMargin, decimal FreeMargin, string Message);

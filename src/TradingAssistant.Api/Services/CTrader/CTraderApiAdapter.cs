@@ -150,7 +150,11 @@ public class CTraderApiAdapter : BackgroundService
         account.UnrealizedPnL = unrealizedPnL;
         account.Equity = account.Balance + unrealizedPnL;
         var leverage = trader.HasLeverageInCents ? (int)(trader.LeverageInCents / 100) : 1;
-        var usedMargin = openPositions.Sum(p => p.Volume * 100_000m * p.EntryPrice / (leverage > 0 ? leverage : 1));
+        var usedMargin = openPositions.Sum(p =>
+        {
+            var cs = _symbolResolver.GetContractSize(p.Symbol);
+            return p.Volume * cs * p.EntryPrice / (leverage > 0 ? leverage : 1);
+        });
         account.FreeMargin = account.Equity - usedMargin;
 
         account.Currency = trader.HasDepositAssetId
@@ -214,7 +218,8 @@ public class CTraderApiAdapter : BackgroundService
             position.Symbol = symbolName;
             position.Direction = protoPos.TradeData.TradeSide == ProtoOATradeSide.Buy
                 ? TradeDirection.Buy : TradeDirection.Sell;
-            position.Volume = CTraderConversions.CentsToLots(protoPos.TradeData.Volume);
+            var posContractSize = _symbolResolver.GetContractSize(symbolName);
+            position.Volume = CTraderConversions.VolumeToLots(protoPos.TradeData.Volume, posContractSize);
             position.EntryPrice = protoPos.HasPrice ? (decimal)protoPos.Price : 0m;
             position.StopLoss = protoPos.HasStopLoss ? (decimal?)protoPos.StopLoss : null;
             position.TakeProfit = protoPos.HasTakeProfit ? (decimal?)protoPos.TakeProfit : null;
@@ -267,7 +272,8 @@ public class CTraderApiAdapter : BackgroundService
             order.Type = MapOrderType(protoOrder.OrderType);
             order.Direction = protoOrder.TradeData.TradeSide == ProtoOATradeSide.Buy
                 ? TradeDirection.Buy : TradeDirection.Sell;
-            order.Volume = CTraderConversions.CentsToLots(protoOrder.TradeData.Volume);
+            var orderContractSize = _symbolResolver.GetContractSize(symbolName);
+            order.Volume = CTraderConversions.VolumeToLots(protoOrder.TradeData.Volume, orderContractSize);
             order.LimitPrice = protoOrder.HasLimitPrice ? (decimal?)protoOrder.LimitPrice : null;
             order.StopPrice = protoOrder.HasStopPrice ? (decimal?)protoOrder.StopPrice : null;
             order.StopLoss = protoOrder.HasStopLoss ? (decimal?)protoOrder.StopLoss : null;

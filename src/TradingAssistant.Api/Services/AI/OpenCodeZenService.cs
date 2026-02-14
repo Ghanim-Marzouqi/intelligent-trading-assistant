@@ -250,9 +250,16 @@ public class OpenCodeZenService : IAiAnalysisService
         try
         {
             var sym = _db.Symbols.FirstOrDefault(s => s.Name == symbol && s.IsActive);
-            var category = sym is not null
-                ? SymbolCategorizer.Categorize(sym.Name, sym.BaseCurrency, sym.QuoteCurrency)
-                : "Other";
+            string category;
+            if (sym is not null && !string.IsNullOrEmpty(sym.BaseCurrency))
+            {
+                category = SymbolCategorizer.Categorize(sym.Name, sym.BaseCurrency, sym.QuoteCurrency);
+            }
+            else
+            {
+                // Fallback: infer from symbol name when BaseCurrency is missing
+                category = SymbolCategorizer.InferFromName(symbol);
+            }
             analysis.MarketSession = MarketSessionService.GetSessionInfo(category);
         }
         catch (Exception ex)

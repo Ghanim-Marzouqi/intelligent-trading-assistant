@@ -3,6 +3,8 @@ import { RouterOutlet, RouterLink, RouterLinkActive, Router, NavigationEnd } fro
 import { Subscription } from 'rxjs';
 import { filter } from 'rxjs/operators';
 import { AuthService } from './auth/auth.service';
+import { SignalRService } from './shared/services/signalr.service';
+import { NotificationService } from './shared/services/notification.service';
 import { ConfirmDialogComponent } from './shared/components/confirm-dialog.component';
 import { NotificationToastComponent } from './shared/components/notification-toast.component';
 
@@ -76,6 +78,14 @@ import { NotificationToastComponent } from './shared/components/notification-toa
                 <path d="M12 2a4 4 0 0 1 4 4v1a1 1 0 0 1-1 1H9a1 1 0 0 1-1-1V6a4 4 0 0 1 4-4z"/><path d="M9 8v1a3 3 0 0 0 6 0V8"/><path d="M12 14v3"/><circle cx="12" cy="20" r="2"/><path d="M5 11h2"/><path d="M17 11h2"/>
               </svg>
               AI Analysis
+            </a>
+          </li>
+          <li>
+            <a routerLink="/charts" routerLinkActive="active">
+              <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M3 3v18h18"/><path d="M7 16l4-8 4 4 4-6"/>
+              </svg>
+              Charts
             </a>
           </li>
           <li>
@@ -284,21 +294,39 @@ import { NotificationToastComponent } from './shared/components/notification-toa
 })
 export class AppComponent implements OnInit, OnDestroy {
   private authService = inject(AuthService);
+  private signalR = inject(SignalRService);
+  private notificationService = inject(NotificationService);
   private router = inject(Router);
   private routerSub: Subscription | null = null;
+  private marginSub: Subscription | null = null;
 
   sidebarOpen = false;
 
   ngOnInit() {
+    // Connect SignalR once at app level — lives for the entire session
+    if (this.authService.isAuthenticated()) {
+      this.signalR.connect();
+    }
+
     this.routerSub = this.router.events
       .pipe(filter(e => e instanceof NavigationEnd))
       .subscribe(() => {
         this.sidebarOpen = false;
       });
+
+    // Global margin warning handler
+    this.marginSub = this.signalR.marginWarning$.subscribe(warning => {
+      if (!warning) return;
+      const type = warning.level === 'StopOut' ? 'error' : 'warning';
+      const duration = warning.level === 'StopOut' ? 15000 : 10000;
+      this.notificationService.show(warning.message, type, duration);
+    });
   }
 
   ngOnDestroy() {
     this.routerSub?.unsubscribe();
+    this.marginSub?.unsubscribe();
+    this.signalR.disconnect();
   }
 
   logout() {

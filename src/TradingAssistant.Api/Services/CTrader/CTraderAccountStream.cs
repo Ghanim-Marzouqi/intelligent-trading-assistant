@@ -28,9 +28,18 @@ public class CTraderAccountStream : ICTraderAccountStream
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<CTraderAccountStream> _logger;
 
+    private readonly IConfiguration _config;
     private IDisposable? _executionSubscription;
     private readonly ConcurrentDictionary<long, DateTime> _lastPnLBroadcast = new();
     private static readonly TimeSpan PnLThrottleInterval = TimeSpan.FromSeconds(2);
+
+    // Margin monitoring state
+    private readonly SemaphoreSlim _marginCheckLock = new(1, 1);
+    private DateTime _lastMarginCheck = DateTime.MinValue;
+    private DateTime _lastMarginWarning = DateTime.MinValue;
+    private bool _stopOutInProgress;
+    private static readonly TimeSpan MarginCheckInterval = TimeSpan.FromSeconds(3);
+    private static readonly TimeSpan MarginWarningCooldown = TimeSpan.FromSeconds(30);
 
     public event EventHandler<PositionEventArgs>? OnPositionOpened;
     public event EventHandler<PositionEventArgs>? OnPositionClosed;
@@ -42,6 +51,7 @@ public class CTraderAccountStream : ICTraderAccountStream
         ICTraderPriceStream priceStream,
         IHubContext<TradingHub, ITradingHubClient> hubContext,
         IServiceScopeFactory scopeFactory,
+        IConfiguration config,
         ILogger<CTraderAccountStream> logger)
     {
         _connectionManager = connectionManager;
@@ -49,6 +59,7 @@ public class CTraderAccountStream : ICTraderAccountStream
         _priceStream = priceStream;
         _hubContext = hubContext;
         _scopeFactory = scopeFactory;
+        _config = config;
         _logger = logger;
     }
 
@@ -191,7 +202,8 @@ public class CTraderAccountStream : ICTraderAccountStream
         position.Symbol = symbolName;
         position.Direction = protoPos.TradeData.TradeSide == ProtoOATradeSide.Buy
             ? TradeDirection.Buy : TradeDirection.Sell;
-        position.Volume = CTraderConversions.CentsToLots(protoPos.TradeData.Volume);
+        var contractSize = _symbolResolver.GetContractSize(symbolName);
+        position.Volume = CTraderConversions.VolumeToLots(protoPos.TradeData.Volume, contractSize);
         position.EntryPrice = protoPos.HasPrice ? (decimal)protoPos.Price : 0m;
         position.StopLoss = protoPos.HasStopLoss ? (decimal?)protoPos.StopLoss : null;
         position.TakeProfit = protoPos.HasTakeProfit ? (decimal?)protoPos.TakeProfit : null;
@@ -257,7 +269,8 @@ public class CTraderAccountStream : ICTraderAccountStream
             position.Symbol = symbolName;
         if (position.Volume == 0m)
         {
-            var closeVolume = CTraderConversions.CentsToLots(protoPos.TradeData.Volume);
+            var contractSize = _symbolResolver.GetContractSize(symbolName);
+            var closeVolume = CTraderConversions.VolumeToLots(protoPos.TradeData.Volume, contractSize);
             if (closeVolume > 0) position.Volume = closeVolume;
         }
         if (position.EntryPrice == 0m && protoPos.HasPrice && (decimal)protoPos.Price > 0)
@@ -343,7 +356,7 @@ public class CTraderAccountStream : ICTraderAccountStream
             Symbol = symbolName,
             Direction = protoDeal.TradeSide == ProtoOATradeSide.Buy
                 ? TradeDirection.Buy : TradeDirection.Sell,
-            Volume = CTraderConversions.CentsToLots(protoDeal.FilledVolume),
+            Volume = CTraderConversions.VolumeToLots(protoDeal.FilledVolume, _symbolResolver.GetContractSize(symbolName)),
             ExecutionPrice = protoDeal.HasExecutionPrice ? (decimal)protoDeal.ExecutionPrice : 0m,
             Commission = protoDeal.HasCommission
                 ? CTraderConversions.MoneyToDecimal(protoDeal.Commission, moneyDigits)
@@ -393,7 +406,7 @@ public class CTraderAccountStream : ICTraderAccountStream
         order.Type = MapOrderType(protoOrder.OrderType);
         order.Direction = protoOrder.TradeData.TradeSide == ProtoOATradeSide.Buy
             ? TradeDirection.Buy : TradeDirection.Sell;
-        order.Volume = CTraderConversions.CentsToLots(protoOrder.TradeData.Volume);
+        order.Volume = CTraderConversions.VolumeToLots(protoOrder.TradeData.Volume, _symbolResolver.GetContractSize(symbolName));
         order.LimitPrice = protoOrder.HasLimitPrice ? (decimal?)protoOrder.LimitPrice : null;
         order.StopPrice = protoOrder.HasStopPrice ? (decimal?)protoOrder.StopPrice : null;
         order.StopLoss = protoOrder.HasStopLoss ? (decimal?)protoOrder.StopLoss : null;
@@ -476,6 +489,10 @@ public class CTraderAccountStream : ICTraderAccountStream
 
         if (positions.Count == 0) return;
 
+        // Look up contract size for this symbol (all positions here share the same symbol)
+        var contractSize = _symbolResolver.GetContractSize(symbol);
+
+        var anyUpdated = false;
         foreach (var position in positions)
         {
             // Throttle: max once per 2 seconds per position
@@ -485,11 +502,12 @@ public class CTraderAccountStream : ICTraderAccountStream
                 continue;
 
             _lastPnLBroadcast[position.Id] = now;
+            anyUpdated = true;
 
-            // Calculate unrealized PnL
+            // Calculate unrealized PnL: lots × contractSize × priceChange
             var pnl = position.Direction == TradeDirection.Buy
-                ? (currentPrice - position.EntryPrice) * position.Volume * 100_000m
-                : (position.EntryPrice - currentPrice) * position.Volume * 100_000m;
+                ? (currentPrice - position.EntryPrice) * position.Volume * contractSize
+                : (position.EntryPrice - currentPrice) * position.Volume * contractSize;
 
             // Update DB
             position.CurrentPrice = currentPrice;
@@ -508,12 +526,161 @@ public class CTraderAccountStream : ICTraderAccountStream
         }
 
         await db.SaveChangesAsync();
+
+        // Broadcast account update and check margin after P&L changes
+        if (anyUpdated)
+        {
+            await BroadcastAccountUpdateAsync(db);
+            await EvaluateMarginAsync(db);
+        }
+    }
+
+    private async Task BroadcastAccountUpdateAsync(AppDbContext db)
+    {
+        var account = await db.Accounts.FirstOrDefaultAsync(a => a.IsActive);
+        if (account is null) return;
+
+        var allPositions = await db.Positions
+            .Where(p => p.Status == PositionStatus.Open)
+            .ToListAsync();
+
+        var unrealizedPnL = allPositions.Sum(p => p.UnrealizedPnL);
+        var equity = account.Balance + unrealizedPnL;
+        var leverage = account.Leverage > 0 ? account.Leverage : 1;
+        var usedMargin = allPositions.Sum(p =>
+        {
+            var cs = _symbolResolver.GetContractSize(p.Symbol);
+            return p.Volume * cs * p.EntryPrice / leverage;
+        });
+        var freeMargin = equity - usedMargin;
+
+        // Update account in DB
+        account.Equity = equity;
+        account.UnrealizedPnL = unrealizedPnL;
+        account.FreeMargin = freeMargin;
+        account.Margin = usedMargin;
+        account.MarginLevel = usedMargin > 0 ? (equity / usedMargin) * 100m : 0m;
+        account.UpdatedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync();
+
+        await _hubContext.Clients.All.ReceiveAccountUpdate(new AccountUpdate(
+            account.Balance, equity, unrealizedPnL, usedMargin, freeMargin,
+            account.MarginLevel));
+    }
+
+    private async Task EvaluateMarginAsync(AppDbContext db)
+    {
+        var now = DateTime.UtcNow;
+        if (now - _lastMarginCheck < MarginCheckInterval) return;
+        if (_stopOutInProgress) return;
+        if (!await _marginCheckLock.WaitAsync(0)) return;
+
+        try
+        {
+            _lastMarginCheck = now;
+
+            var account = await db.Accounts.FirstOrDefaultAsync(a => a.IsActive);
+            if (account is null) return;
+
+            var allPositions = await db.Positions
+                .Where(p => p.Status == PositionStatus.Open)
+                .ToListAsync();
+
+            if (allPositions.Count == 0) return;
+
+            var unrealizedPnL = allPositions.Sum(p => p.UnrealizedPnL);
+            var equity = account.Balance + unrealizedPnL;
+            var leverage = account.Leverage > 0 ? account.Leverage : 1;
+            var usedMargin = allPositions.Sum(p =>
+            {
+                var cs = _symbolResolver.GetContractSize(p.Symbol);
+                return p.Volume * cs * p.EntryPrice / leverage;
+            });
+
+            if (usedMargin <= 0) return;
+
+            var marginLevel = (equity / usedMargin) * 100m;
+
+            var stopOutLevel = _config.GetValue<decimal>("Risk:StopOutLevel", 50m);
+            var marginCallLevel = _config.GetValue<decimal>("Risk:MarginCallLevel", 100m);
+
+            // Stop-out: close largest losing position
+            if (marginLevel <= stopOutLevel)
+            {
+                _stopOutInProgress = true;
+                _logger.LogCritical(
+                    "STOP-OUT triggered! Margin level {MarginLevel:F1}% <= {StopOutLevel}%. Equity={Equity:F2}, UsedMargin={UsedMargin:F2}",
+                    marginLevel, stopOutLevel, equity, usedMargin);
+
+                // Close position with largest loss first
+                var worstPosition = allPositions
+                    .OrderBy(p => p.UnrealizedPnL)
+                    .First();
+
+                await _hubContext.Clients.All.ReceiveMarginWarning(new MarginWarning(
+                    "StopOut", marginLevel, equity, usedMargin, equity - usedMargin,
+                    $"Stop-out at {marginLevel:F1}%. Closing {worstPosition.Symbol} ({worstPosition.UnrealizedPnL:F2} P&L)"));
+
+                try
+                {
+                    using var closeScope = _scopeFactory.CreateScope();
+                    var executor = closeScope.ServiceProvider.GetRequiredService<ICTraderOrderExecutor>();
+                    var result = await executor.ClosePositionAsync(worstPosition.CTraderPositionId);
+
+                    if (result.Success)
+                    {
+                        _logger.LogWarning(
+                            "Stop-out closed position {PositionId} ({Symbol}, P&L={PnL:F2}). Margin level was {MarginLevel:F1}%",
+                            worstPosition.CTraderPositionId, worstPosition.Symbol,
+                            worstPosition.UnrealizedPnL, marginLevel);
+                    }
+                    else
+                    {
+                        _logger.LogError("Stop-out failed to close position {PositionId}: {Error}",
+                            worstPosition.CTraderPositionId, result.ErrorMessage);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Stop-out exception closing position {PositionId}",
+                        worstPosition.CTraderPositionId);
+                }
+                finally
+                {
+                    _stopOutInProgress = false;
+                }
+            }
+            // Margin call warning
+            else if (marginLevel <= marginCallLevel && now - _lastMarginWarning > MarginWarningCooldown)
+            {
+                _lastMarginWarning = now;
+                _logger.LogWarning(
+                    "Margin call warning! Margin level {MarginLevel:F1}% <= {MarginCallLevel}%. Equity={Equity:F2}, UsedMargin={UsedMargin:F2}",
+                    marginLevel, marginCallLevel, equity, usedMargin);
+
+                await _hubContext.Clients.All.ReceiveMarginWarning(new MarginWarning(
+                    "MarginCall", marginLevel, equity, usedMargin, equity - usedMargin,
+                    $"Margin call warning! Margin level at {marginLevel:F1}%. Consider closing positions."));
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error evaluating margin level");
+            _stopOutInProgress = false;
+        }
+        finally
+        {
+            _marginCheckLock.Release();
+        }
     }
 
     private async Task HandlePositionOpened(PositionEventArgs args)
     {
         _logger.LogInformation("Position opened: {Symbol} {Direction} {Volume}",
             args.Symbol, args.Direction, args.Volume);
+
+        // Ensure the price stream is subscribed to this symbol so P&L updates flow
+        await _priceStream.SubscribeAsync(args.Symbol);
 
         OnPositionOpened?.Invoke(this, args);
 
