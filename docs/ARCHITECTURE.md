@@ -302,9 +302,9 @@ A `docker-compose.override.yml` provides local development defaults (ports, dev 
 
 | Route | Target |
 |-------|--------|
-| `trading.yourdomain.com` | Angular dashboard (trading-ui container) |
-| `api.trading.yourdomain.com` | ASP.NET Core API (trading-api container) |
-| `api.trading.yourdomain.com/hub` | SignalR WebSocket endpoint |
+| `optimistgm.xyz` | Angular dashboard (trading-ui container) |
+| `api.optimistgm.xyz` | ASP.NET Core API (trading-api container) |
+| `api.optimistgm.xyz/hub` | SignalR WebSocket endpoint |
 
 ---
 

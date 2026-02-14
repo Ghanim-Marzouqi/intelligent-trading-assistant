@@ -1,6 +1,6 @@
 # API Reference
 
-Base URL: `http://localhost:5000/api` (local) or `https://api.trading.yourdomain.com/api` (production)
+Base URL: `http://localhost:5000/api` (local) or `https://api.optimistgm.xyz/api` (production)
 
 All endpoints except `/api/auth/*` require a JWT bearer token in the `Authorization` header.
 

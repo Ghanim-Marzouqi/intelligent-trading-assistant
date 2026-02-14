@@ -26,9 +26,11 @@ services:
       - WhatsApp__PhoneNumberId=${WHATSAPP_PHONE_NUMBER_ID}
       - WhatsApp__AccessToken=${WHATSAPP_ACCESS_TOKEN}
       - AiProvider__ApiKey=${OPENCODE_ZEN_API_KEY}
+      - ConnectionStrings__Redis=redis:6379
+      - CTrader__RedirectUri=https://api.optimistgm.xyz/api/auth/ctrader/callback
       - Jwt__Secret=${JWT_SECRET}
       - Auth__Password=${AUTH_PASSWORD}
-      - Cors__AllowedOrigins=${CORS_ALLOWED_ORIGINS:-https://trading.yourdomain.com}
+      - Cors__AllowedOrigins=${CORS_ALLOWED_ORIGINS:-https://optimistgm.xyz}
       - DataProtection__KeysPath=/app/keys
     volumes:
       - dpkeys:/app/keys
@@ -39,7 +41,7 @@ services:
         condition: service_started
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.api.rule=Host(`api.trading.yourdomain.com`)"
+      - "traefik.http.routers.api.rule=Host(`api.optimistgm.xyz`)"
       - "traefik.http.routers.api.tls.certresolver=letsencrypt"
       - "traefik.http.services.api.loadbalancer.server.port=8080"
     networks:
@@ -50,7 +52,7 @@ services:
     build: ./src/trading-ui
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.ui.rule=Host(`trading.yourdomain.com`)"
+      - "traefik.http.routers.ui.rule=Host(`optimistgm.xyz`)"
       - "traefik.http.routers.ui.tls.certresolver=letsencrypt"
       - "traefik.http.services.ui.loadbalancer.server.port=80"
     networks:
@@ -101,7 +103,7 @@ services:
       - grafanadata:/var/lib/grafana
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.grafana.rule=Host(`grafana.trading.yourdomain.com`)"
+      - "traefik.http.routers.grafana.rule=Host(`grafana.optimistgm.xyz`)"
       - "traefik.http.routers.grafana.tls.certresolver=letsencrypt"
       - "traefik.http.services.grafana.loadbalancer.server.port=3000"
     networks:
