@@ -2,7 +2,7 @@
 
 ## IC Markets cTrader Integration | Angular + ASP.NET Core + PostgreSQL
 
-**Version:** 1.1
+**Version:** 1.2
 **Date:** February 2026
 
 ---
@@ -94,13 +94,15 @@ The system follows a layered architecture pattern with clear separation of conce
 | Frontend | Angular 19+ | Dashboard, chart visualization, alert configuration |
 | Backend | ASP.NET Core 10 (.NET 10 LTS) | REST API, SignalR hub, background services |
 | Database | PostgreSQL 18 | Trade history, alert configs, analytics data |
+| Cache | Redis 7 | Distributed caching, rate limiter backing store |
 | Broker API | cTrader Open API | Price streaming, account data, order execution |
 | Messaging | Telegram Bot API | Primary notification channel, command interface |
 | Messaging | WhatsApp Cloud API | Secondary notification channel |
 | Real-time | SignalR | Live price updates and alerts to Angular dashboard |
 | Reverse Proxy | Traefik v3.6 | SSL termination, routing, auto-certificates |
 | Containerization | Docker + Compose | Service orchestration, isolation, deployment |
-| AI (Phase 4) | OpenCode Zen API (GLM 4.7) | Market analysis, news summarization, sentiment — provider-agnostic design allows switching models |
+| Monitoring | Prometheus + Grafana | Metrics collection, dashboards, alerting |
+| AI | OpenCode Zen API | Market analysis, news summarization, sentiment — provider-agnostic design allows switching models |
 
 ### Why cTrader Open API?
 
@@ -144,17 +146,20 @@ A background service (`IHostedService`) that maintains a persistent gRPC connect
 - Execute orders when approved via the semi-automated workflow
 - Handle connection drops with automatic reconnection and state recovery
 
-**Key files to implement:**
+**Key files:**
 
 ```
 Services/
 ├── CTrader/
-│   ├── CTraderApiAdapter.cs          # Main background service
-│   ├── CTraderAuthService.cs         # OAuth2 token management
+│   ├── CTraderApiAdapter.cs          # Main background service (IHostedService)
+│   ├── ICTraderAuthService.cs        # Auth interface
+│   ├── CTraderConnectionManager.cs   # gRPC connection lifecycle
 │   ├── CTraderPriceStream.cs         # Price subscription handler
 │   ├── CTraderAccountStream.cs       # Account events handler
 │   ├── CTraderOrderExecutor.cs       # Order placement/modification
-│   └── Protobuf/                     # Generated .proto files
+│   ├── CTraderSymbolResolver.cs      # Symbol ID ↔ name resolution
+│   ├── CTraderHistoricalData.cs      # OHLCV candle retrieval
+│   └── CTraderConversions.cs         # Unit conversion helpers
 ```
 
 ### Alert Engine
@@ -168,21 +173,18 @@ Evaluates incoming price data against user-defined alert rules. Supports multipl
 
 When conditions are met, the engine publishes an event that the Notification Service picks up and delivers via Telegram and WhatsApp.
 
-**Key files to implement:**
+**Key files:**
 
 ```
 Services/
 ├── Alerts/
-│   ├── AlertEngine.cs                # Main evaluation loop
+│   ├── AlertEngine.cs                # Main evaluation loop (IHostedService)
+│   ├── AlertRuleRepository.cs        # CRUD for alert configurations
 │   ├── Conditions/
 │   │   ├── PriceCondition.cs         # Price level/change checks
-│   │   ├── IndicatorCondition.cs     # RSI, MACD, Bollinger
-│   │   └── CompositeCondition.cs     # AND/OR logic combiner
-│   ├── Indicators/
-│   │   ├── RsiCalculator.cs
-│   │   ├── MacdCalculator.cs
-│   │   └── BollingerCalculator.cs
-│   └── AlertRuleRepository.cs        # CRUD for alert configurations
+│   │   └── IndicatorCondition.cs     # RSI, MACD, Bollinger
+│   └── Indicators/
+│       └── RsiCalculator.cs          # RSI calculation
 ```
 
 ### Trade Journal Service
@@ -195,7 +197,7 @@ Automatically captures every trade from cTrader and enriches it with analytics m
 - Manual tagging support (e.g., strategy name, setup type, emotional state)
 - Daily/weekly/monthly performance aggregations computed automatically
 
-**Key files to implement:**
+**Key files:**
 
 ```
 Services/
@@ -216,15 +218,14 @@ Provides a human-in-the-loop workflow for trade execution:
 4. You approve or reject with a single tap; approved orders execute immediately
 5. All pending and executed orders are logged for audit and review
 
-**Key files to implement:**
+**Key files:**
 
 ```
 Services/
 ├── Orders/
-│   ├── OrderManager.cs               # Strategy rule evaluator
+│   ├── OrderManager.cs               # Strategy rule evaluator + execution
 │   ├── PositionSizer.cs              # Lot size from risk % and SL distance
-│   ├── OrderPreparer.cs              # Builds complete order with SL/TP
-│   ├── ApprovalWorkflow.cs           # Telegram confirmation flow
+│   ├── ApprovalTokenStore.cs         # In-memory pending order store
 │   └── RiskGuard.cs                  # Max position, daily loss, correlation checks
 ```
 
@@ -240,18 +241,14 @@ A unified notification gateway that delivers messages through multiple channels:
 
 Telegram also serves as a command interface, allowing you to check account status, list open positions, or approve trades directly from the chat.
 
-**Key files to implement:**
+**Key files:**
 
 ```
 Services/
 ├── Notifications/
-│   ├── NotificationService.cs        # Unified gateway
-│   ├── TelegramBotService.cs         # Bot API + command handler
-│   ├── WhatsAppService.cs            # Cloud API integration
-│   └── Templates/
-│       ├── AlertTemplate.cs          # Alert message formatting
-│       ├── TradeTemplate.cs          # Trade confirmation formatting
-│       └── SummaryTemplate.cs        # Daily/weekly summary formatting
+│   ├── NotificationService.cs        # Unified gateway (SignalR + channels)
+│   ├── TelegramBotService.cs         # Bot API + command handler (IHostedService)
+│   └── WhatsAppService.cs            # Cloud API integration
 ```
 
 ---
@@ -265,63 +262,41 @@ All services run as Docker containers orchestrated via Docker Compose:
 | Container | Image | Port | Resources |
 |-----------|-------|------|-----------|
 | `traefik` | traefik:v3.6 | 80, 443 | 128MB RAM |
-| `trading-api` | Custom .NET 10 | 5000 (internal) | 512MB RAM |
+| `trading-api` | Custom .NET 10 | 8080 (internal) | 512MB RAM |
 | `trading-ui` | nginx:alpine | 80 (internal) | 64MB RAM |
 | `postgres` | postgres:18-alpine | 5432 (internal) | 1GB RAM |
+| `redis` | redis:7-alpine | 6379 (internal) | 128MB RAM |
+| `prometheus` | prom/prometheus | 9090 (internal) | 256MB RAM |
+| `grafana` | grafana/grafana | 3000 (internal) | 256MB RAM |
 
-Total estimated resource usage: ~1.7GB RAM out of 8GB available.
+Total estimated resource usage: ~2.3GB RAM out of 8GB available.
 
 ### Docker Compose Structure
 
 ```yaml
-# docker-compose.yml
+# docker-compose.yml (simplified — see docker-compose.override.yml for local dev)
 services:
-  traefik:
-    image: traefik:v3.6
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ./traefik:/etc/traefik
-      - traefik-certs:/letsencrypt
-    restart: unless-stopped
-
+  traefik:    # Reverse proxy with auto-TLS
   trading-api:
     build: ./src/TradingAssistant.Api
-    environment:
-      - ASPNETCORE_ENVIRONMENT=Production
-      - ConnectionStrings__DefaultConnection=Host=postgres;Database=trading_assistant;Username=${DB_USER};Password=${DB_PASSWORD}
     depends_on:
-      - postgres
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.api.rule=Host(`api.trading.yourdomain.com`)"
-      - "traefik.http.routers.api.tls.certresolver=letsencrypt"
-    restart: unless-stopped
-
+      postgres: { condition: service_healthy }
+      redis:    { condition: service_started }
   trading-ui:
     build: ./src/trading-ui
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.ui.rule=Host(`trading.yourdomain.com`)"
-      - "traefik.http.routers.ui.tls.certresolver=letsencrypt"
-    restart: unless-stopped
-
   postgres:
     image: postgres:18-alpine
-    environment:
-      - POSTGRES_DB=trading_assistant
-      - POSTGRES_USER=${DB_USER}
-      - POSTGRES_PASSWORD=${DB_PASSWORD}
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    restart: unless-stopped
-
-volumes:
-  pgdata:
-  traefik-certs:
+    healthcheck: ...
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+  prometheus:
+    image: prom/prometheus:latest
+  grafana:
+    image: grafana/grafana:latest
 ```
+
+A `docker-compose.override.yml` provides local development defaults (ports, dev credentials, Docker profiles). See [LOCAL-DEVELOPMENT.md](LOCAL-DEVELOPMENT.md) for usage.
 
 ### Traefik Routes
 
@@ -337,19 +312,26 @@ volumes:
 
 | Concern | Mitigation |
 |---------|------------|
-| API Credentials | cTrader OAuth2 tokens stored as Docker secrets, never in code or config files |
-| Database Access | PostgreSQL only accessible within Docker network; no external port exposure |
+| Authentication | JWT bearer tokens with HMAC-SHA256; configurable expiry; constant-time password comparison |
+| API Credentials | cTrader OAuth2 tokens stored in DB; secrets via environment variables, never committed |
+| Database Access | PostgreSQL only accessible within Docker network; no external port exposure in production |
 | HTTPS | All external traffic encrypted via Traefik with auto-renewed Let's Encrypt certificates |
 | Trade Execution | Human-in-the-loop approval required for all orders; no fully autonomous trading |
 | Telegram Bot | Bot restricted to your chat ID only; commands from other users are ignored |
-| Rate Limiting | API rate limiting to prevent accidental order flooding; circuit breaker on cTrader connection |
+| Rate Limiting — Global | Fixed-window: 100 requests/minute per IP across all endpoints |
+| Rate Limiting — Auth | Fixed-window: 10 requests/minute on `/api/auth/login` |
+| Rate Limiting — Trading | Fixed-window: 10 requests/minute on order execution endpoints (open, close, modify, approve) |
+| Pagination Limits | All history endpoints clamp `limit` to 1–500 to prevent unbounded queries |
+| Data Integrity | Explicit DB transactions on multi-step operations (order fills, journal recording, analytics) |
+| HTTP Timeouts | AI API client configured with 30s timeout to prevent connection pool exhaustion |
+| Background Tasks | Bounded task queue (capacity 100) prevents unbounded memory growth |
 | Backup | Daily PostgreSQL backups via pg_dump; VPS snapshot available |
 
 ---
 
 ## Development Phases
 
-### Phase 1: Foundation + Smart Alerts (Weeks 1–4)
+### Phase 1: Foundation + Smart Alerts (Weeks 1–4) ✅
 
 **Goal:** Get the core infrastructure running with real-time price monitoring and alert notifications.
 
@@ -361,7 +343,7 @@ volumes:
 
 **Deliverable:** A working system that monitors prices and sends you Telegram/WhatsApp alerts based on your rules.
 
-### Phase 2: Trade Journal + Analytics (Weeks 5–8)
+### Phase 2: Trade Journal + Analytics (Weeks 5–8) ✅
 
 **Goal:** Automatically log all trades and provide performance insights.
 
@@ -373,7 +355,7 @@ volumes:
 
 **Deliverable:** Complete automated trade journal with performance analytics dashboard.
 
-### Phase 3: Semi-Automated Execution (Weeks 9–12)
+### Phase 3: Semi-Automated Execution (Weeks 9–12) ✅
 
 **Goal:** Move from alerts to actionable trade proposals with one-tap execution.
 
@@ -385,7 +367,7 @@ volumes:
 
 **Deliverable:** Semi-automated trading system with human approval workflow.
 
-### Phase 4: AI Integration + News Monitoring (Weeks 13–16)
+### Phase 4: AI Integration + News Monitoring (Weeks 13–16) ✅
 
 **Goal:** Add intelligence layer for market context and sentiment analysis using OpenCode Zen.
 
@@ -398,10 +380,9 @@ Services/
 ├── AI/
 │   ├── IAiAnalysisService.cs            # Provider-agnostic interface
 │   ├── OpenCodeZenService.cs            # OpenCode Zen API client (OpenAI-compatible)
-│   ├── AiMarketAnalyzer.cs              # Market condition summaries
-│   ├── AiTradeReviewer.cs               # Trade journal AI review
-│   ├── AiAlertEnricher.cs               # Contextual alert descriptions
-│   └── AiNewsSentiment.cs               # News scanning + sentiment
+│   └── MarketSessionService.cs          # Trading session time utilities
+├── Analysis/
+│   └── ScheduledAnalysisService.cs      # Cron-style watchlist analysis (IHostedService)
 ```
 
 **Configuration (appsettings.json):**
@@ -522,11 +503,17 @@ CTRADER_CLIENT_SECRET=your_secret
 | `/status` | Show account balance, equity, margin, and open P&L |
 | `/positions` | List all open positions with current P&L |
 | `/alerts` | List active alert rules |
-| `/alert EURUSD > 1.0900` | Create a quick price alert |
+| `/alert EURUSD > 1.0900` | Create a quick one-shot price alert |
 | `/today` | Show today's trading summary (trades, P&L, win rate) |
 | `/week` | Show this week's performance summary |
-| `/close EURUSD` | Close all positions for a symbol (requires confirmation) |
 | `/calendar` | Show upcoming economic events for today |
+| `/analyze EURUSD` | Run AI market analysis for a symbol |
+| `/briefing` | Generate daily market briefing for watchlist symbols |
+| `/review 123` | AI review of a specific trade by ID |
+| `/news EURUSD` | AI news sentiment analysis for a symbol |
+| `/help` | Show all available commands |
+
+The bot also supports inline approve/reject buttons for order confirmations sent via the semi-automated execution workflow.
 
 ---
 
@@ -551,14 +538,14 @@ CTRADER_CLIENT_SECRET=your_secret
 
 ## Next Steps
 
-1. Create an IC Markets cTrader **demo account** from the Client Area for development and testing
-2. Create a cTrader Open API application at [open.ctrader.com](https://open.ctrader.com) to obtain Client ID and Secret
-3. Set up the Docker Compose project structure with Traefik, ASP.NET Core, PostgreSQL, and Angular
-4. Implement the cTrader API adapter with OAuth2 authentication
-5. Create the Telegram bot via BotFather and implement the notification service
-6. Design and migrate the PostgreSQL schemas
-7. Build the first alert rule and test end-to-end: price change → alert engine → Telegram notification
-8. (Phase 4) Generate an OpenCode Zen API key and configure the AI analysis service
+All four development phases are complete. Remaining work focuses on hardening and operations:
+
+1. **Credential rotation** — Rotate any secrets that were previously committed to git history
+2. **Circuit breaker** — Add Polly circuit breaker policies to external service calls (cTrader, Telegram, AI)
+3. **Test coverage** — Add tests for rate limiting, pagination clamping, transaction rollback, and BackgroundTaskQueue
+4. **Redis Streams event bus** — Decouple price stream producers from consumers for better resilience
+5. **OpenTelemetry tracing** — End-to-end distributed tracing across services
+6. **Live validation** — Run the full system against a demo account for 2–4 weeks before switching to live
 
 ---
 
@@ -568,9 +555,11 @@ The following enhancements should be considered during implementation to improve
 
 ### Message Broker for Event Decoupling
 
-The current architecture shows direct service-to-service communication. For a system handling real-time price streams and order execution, introducing a message broker improves resilience and decoupling.
+> **Status:** Partially implemented. Redis is deployed for caching and rate limiting. Event bus via Redis Streams remains a future enhancement.
 
-**Recommendation:** Add Redis Streams or RabbitMQ as an event bus.
+The current architecture uses direct service-to-service communication for price events. For higher throughput, introducing Redis Streams as an event bus would improve resilience and decoupling.
+
+**Recommendation:** Use Redis Streams as an event bus (Redis container already deployed).
 
 ```
 ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
@@ -608,9 +597,9 @@ Host=postgres;Database=trading_assistant;Username=...;Password=...;Pooling=true;
 
 ### Event-Driven Alert Engine
 
-The alert engine should avoid a synchronous polling loop that evaluates all rules on every price tick.
+> **Status:** Implemented. `AlertEngine` uses a `ConcurrentDictionary<string, List<AlertRule>>` keyed by symbol, subscribed to `CTraderPriceStream.OnPriceUpdate` events.
 
-**Recommendation:** Use an event-driven architecture with selective evaluation.
+The alert engine avoids a synchronous polling loop by using event-driven selective evaluation.
 
 ```csharp
 // Instead of: foreach (var rule in allRules) { Evaluate(rule, price); }
@@ -638,9 +627,9 @@ public class AlertEngine : IHostedService
 
 ### Observability Stack
 
-Critical for debugging issues in a trading system where timing and state matter.
+> **Status:** Partially implemented. Serilog structured logging, Prometheus metrics endpoint (`/metrics`), and Grafana dashboards are deployed. OpenTelemetry distributed tracing remains a future enhancement.
 
-**Recommendation:** Implement structured logging, metrics, and distributed tracing.
+Critical for debugging issues in a trading system where timing and state matter.
 
 | Component | Technology | Purpose |
 |-----------|------------|---------|
@@ -679,9 +668,9 @@ trading_telegram_delivery_latency_ms
 
 ### cTrader Reconnection Strategy
 
-Connection drops during volatile markets need careful handling to avoid missed data or duplicate orders.
+> **Status:** Implemented. `CTraderConnectionManager` handles reconnection with exponential backoff. `TelegramBotService` also uses exponential backoff for initial connection.
 
-**Recommendation:** Implement a robust reconnection state machine.
+Connection drops during volatile markets need careful handling to avoid missed data or duplicate orders.
 
 ```
 ┌─────────────┐    auth success    ┌─────────────┐
@@ -727,6 +716,8 @@ public class ReconnectionPolicy
 ```
 
 ### Circuit Breaker Pattern
+
+> **Status:** Not yet implemented. HTTP timeouts (30s on AI client) provide basic protection; full Polly circuit breakers remain a future enhancement.
 
 Protect against cascading failures when external services (cTrader, Telegram, WhatsApp) are degraded.
 
@@ -779,77 +770,85 @@ public class RiskGuard
 ## Project Structure
 
 ```
-trading-assistant/
+intelligent-trading-assistant/
 ├── docker-compose.yml
-├── .env
+├── docker-compose.override.yml        # Local dev overrides (ports, profiles, dev creds)
+├── .env.example                       # Template for environment variables
+├── prometheus.yml                     # Production Prometheus config
+├── prometheus.local.yml               # Local dev Prometheus config
 ├── traefik/
 │   └── traefik.yml
+├── grafana/
+│   └── provisioning/
+│       └── datasources/
+│           └── prometheus.yml
+├── scripts/
+│   ├── backup.sh
+│   ├── deploy.sh
+│   └── init-db.sql
 ├── src/
 │   ├── TradingAssistant.Api/
 │   │   ├── Dockerfile
 │   │   ├── Program.cs
 │   │   ├── Controllers/
-│   │   │   ├── AlertsController.cs
-│   │   │   ├── JournalController.cs
-│   │   │   ├── PositionsController.cs
-│   │   │   └── AnalyticsController.cs
+│   │   │   ├── AiController.cs        # AI analysis, briefings, candles
+│   │   │   ├── AlertsController.cs    # Alert CRUD + trigger history
+│   │   │   ├── AnalyticsController.cs # Performance overview, equity curve
+│   │   │   ├── AuthController.cs      # JWT login + cTrader OAuth
+│   │   │   ├── JournalController.cs   # Trade journal, tags, notes
+│   │   │   ├── OrdersController.cs    # Pending order approval/rejection
+│   │   │   ├── PositionsController.cs # Positions, account, symbols, orders
+│   │   │   └── WatchlistController.cs # Watchlist + analysis settings
 │   │   ├── Hubs/
-│   │   │   └── TradingHub.cs
+│   │   │   └── TradingHub.cs          # SignalR hub for real-time updates
 │   │   ├── Services/
-│   │   │   ├── CTrader/
-│   │   │   │   ├── CTraderApiAdapter.cs
-│   │   │   │   ├── CTraderAuthService.cs
-│   │   │   │   ├── CTraderPriceStream.cs
-│   │   │   │   ├── CTraderAccountStream.cs
-│   │   │   │   └── CTraderOrderExecutor.cs
-│   │   │   ├── Alerts/
-│   │   │   │   ├── AlertEngine.cs
-│   │   │   │   ├── Conditions/
-│   │   │   │   └── Indicators/
-│   │   │   ├── Journal/
-│   │   │   │   ├── TradeJournalService.cs
-│   │   │   │   ├── TradeEnricher.cs
-│   │   │   │   └── AnalyticsAggregator.cs
-│   │   │   ├── Orders/
-│   │   │   │   ├── OrderManager.cs
-│   │   │   │   ├── PositionSizer.cs
-│   │   │   │   └── RiskGuard.cs
+│   │   │   ├── BackgroundTaskQueue.cs # Bounded channel-based task queue
+│   │   │   ├── SymbolCategorizer.cs   # Forex/Metal/Index/Crypto classification
 │   │   │   ├── AI/
-│   │   │   │   ├── IAiAnalysisService.cs
-│   │   │   │   ├── OpenCodeZenService.cs
-│   │   │   │   ├── AiMarketAnalyzer.cs
-│   │   │   │   ├── AiTradeReviewer.cs
-│   │   │   │   ├── AiAlertEnricher.cs
-│   │   │   │   └── AiNewsSentiment.cs
-│   │   │   └── Notifications/
-│   │   │       ├── NotificationService.cs
-│   │   │       ├── TelegramBotService.cs
-│   │   │       └── WhatsAppService.cs
+│   │   │   ├── Alerts/
+│   │   │   ├── Analysis/
+│   │   │   ├── CTrader/
+│   │   │   ├── Journal/
+│   │   │   ├── Notifications/
+│   │   │   └── Orders/
 │   │   ├── Data/
 │   │   │   ├── AppDbContext.cs
-│   │   │   └── Migrations/
+│   │   │   └── Migrations/            # 7 EF Core migrations
 │   │   └── Models/
-│   │       ├── Trading/
-│   │       ├── Alerts/
-│   │       ├── Journal/
-│   │       └── Analytics/
+│   │       ├── Trading/               # Account, Position, Order, Deal, Symbol, WatchlistSymbol
+│   │       ├── Alerts/                # AlertRule, AlertCondition, AlertTrigger
+│   │       ├── Journal/               # TradeEntry, TradeTag, TradeNote
+│   │       └── Analytics/             # DailyStats, PairStats, EquitySnapshot, AnalysisSnapshot
 │   └── trading-ui/
 │       ├── Dockerfile
-│       ├── src/
-│       │   ├── app/
-│       │   │   ├── dashboard/
-│       │   │   ├── alerts/
-│       │   │   ├── journal/
-│       │   │   ├── analytics/
-│       │   │   ├── positions/
-│       │   │   └── shared/
-│       │   └── environments/
-│       └── angular.json
-├── scripts/
-│   ├── backup.sh
-│   └── deploy.sh
+│       ├── nginx.conf
+│       └── src/app/
+│           ├── app.component.ts       # Shell with sidebar navigation
+│           ├── app.routes.ts          # Lazy-loaded routes
+│           ├── auth/                  # Login, AuthGuard, AuthInterceptor, AuthService
+│           ├── dashboard/             # Real-time account overview
+│           ├── positions/             # Open positions + order placement
+│           ├── alerts/                # Alert rule management
+│           ├── journal/               # Trade journal browser
+│           ├── analytics/             # Performance charts and stats
+│           ├── ai-analysis/           # AI market analysis + trade chart
+│           ├── watchlist/             # Watchlist + scan settings
+│           └── shared/
+│               ├── components/        # ConfirmDialog, NotificationToast
+│               ├── interceptors/      # ErrorInterceptor (global HTTP error handling)
+│               └── services/          # SignalR, Notification, ConfirmDialog services
+├── tests/
+│   └── TradingAssistant.Tests/
+│       ├── AI/                        # OpenCodeZenService tests
+│       ├── Alerts/                    # PriceCondition, IndicatorCondition tests
+│       ├── CTrader/                   # CTraderPriceStream tests
+│       ├── Indicators/                # RSI, MACD, Bollinger calculator tests
+│       ├── Journal/                   # AnalyticsAggregator, TradeEnricher tests
+│       └── Orders/                    # PositionSizer, RiskGuard tests
 └── docs/
-    └── ARCHITECTURE.md
+    ├── ARCHITECTURE.md
+    ├── LOCAL-DEVELOPMENT.md
+    └── API.md
 ```
 
 ---
